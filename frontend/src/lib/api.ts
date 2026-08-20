@@ -6,7 +6,9 @@
 
 // In development the FastAPI service normally runs on port 8000. Production
 // deployments must set NEXT_PUBLIC_API_URL to the deployed HTTPS API URL.
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+// Treat a missing *or blank* deployment variable as unset. Vercel can detect
+// keys from .env.example before a production API URL has been entered.
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000').replace(/\/$/, '');
 
 async function get<T>(path: string): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
