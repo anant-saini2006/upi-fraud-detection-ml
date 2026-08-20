@@ -1,0 +1,16 @@
+# Training and FastAPI runtime. Pin these to the versions used to create the
+# committed joblib artifacts so deployment does not deserialize across an
+# incompatible scikit-learn version.
+pandas==2.3.3
+numpy==2.0.2
+scikit-learn==1.6.1
+imbalanced-learn==0.12.4
+joblib==1.5.3
+fastapi==0.128.8
+uvicorn==0.39.0
+python-multipart==0.0.20
+psycopg2-binary==2.9.10
+
+# Useful for optional notebook-based EDA; the Next.js UI uses Recharts.
+matplotlib==3.9.1
+seaborn==0.13.2

@@ -1,0 +1,43 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+*.log
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/out/
+*.tsbuildinfo
+
+# Data (large files — only ship the sample)
+# data/transactions.csv   # keep this committed (it's the sample)
+
+# Model files (commit these for Vercel deployment)
+# models/*.pkl            # keep committed — needed for API cold-start
+
+# Jupyter
+.ipynb_checkpoints/
+
+# macOS
+.DS_Store
+
+# SQLite (local only — Vercel doesn't use it)
+transactions.db
+
+# IDE
+.idea/
+.vscode/
+*.swp
+.vercel
+.env*
+# Keep safe configuration templates in version control; all real environment
+# files (for example .env.local) remain ignored.
+!.env.example
+!frontend/.env.example
