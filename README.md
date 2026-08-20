@@ -14,8 +14,20 @@ predictions, dataset analysis, and model evaluation.
 > It is not connected to NPCI, any bank, or the live UPI network, and it is not
 > real-time payment-network infrastructure.
 
+## Live demo
+
+- **Dashboard:** [upi-fraud-detection-ml.vercel.app](https://upi-fraud-detection-ml.vercel.app)
+- **Inference API:** [upi-fraud-detection-api.vercel.app](https://upi-fraud-detection-api.vercel.app)
+- **API health:** [upi-fraud-detection-api.vercel.app/api/health](https://upi-fraud-detection-api.vercel.app/api/health)
+
+The public demo uses two separate Vercel projects: a Next.js frontend and a
+FastAPI inference API. PostgreSQL/Neon is **not configured** on the current
+public demo, so predictions are still scored normally but are not retained in
+the transaction-history table.
+
 ## Contents
 
+- [Live demo](#live-demo)
 - [Data provenance and scope](#current-data-status--read-before-presenting-results)
 - [Architecture](#architecture)
 - [Highlights](#what-is-built)
@@ -23,7 +35,8 @@ predictions, dataset analysis, and model evaluation.
 - [API reference](#api-endpoints)
 - [Model workflow](#model-workflow-and-viva-points)
 - [Testing](#testing-and-quality-checks)
-- [Configuration and deployment](#configuration-and-persistence)
+- [Configuration](#configuration-and-persistence)
+- [Deployment](#deployment)
 - [Security, contributing, and roadmap](#security-and-responsible-use)
 
 ## Current data status — read before presenting results
@@ -69,8 +82,8 @@ for UPI-style fraud detection.”*
 
 ```mermaid
 flowchart LR
-  U[User] --> N[Next.js frontend on Vercel]
-  N -->|HTTPS JSON| A[FastAPI inference API on Render]
+  U[User] --> N[Next.js frontend (Vercel project: frontend)]
+  N -->|HTTPS JSON| A[FastAPI inference API (Vercel project: repository root)]
   A --> M[Saved model + preprocessing pipeline]
   A -->|optional prediction history| P[(Neon Postgres)]
   D[Documented digital-payments dataset] --> T[Training pipeline]
@@ -79,7 +92,8 @@ flowchart LR
 
 The frontend never loads or retrains the model. The API applies the exact
 saved preprocessing object used in training, then returns a probability,
-label, and risk band.
+label, and risk band. The current public deployment uses two independent
+Vercel projects; the frontend calls the API over HTTPS.
 
 ## What is built
 
@@ -308,32 +322,56 @@ prediction works normally but history stays empty.
 | `DATABASE_URL` | FastAPI | No | Neon/PostgreSQL connection string for durable history |
 | `NEXT_PUBLIC_API_URL` | Next.js | Yes in production | Public HTTPS base URL of the FastAPI service |
 
-Also set `ALLOWED_ORIGINS` to your frontend URL in production, for example:
+### Current Vercel environment configuration
+
+Set these values in the Vercel project dashboards; do not commit them to a
+repository file:
 
 ```dotenv
-ALLOWED_ORIGINS=https://your-project.vercel.app
-DATABASE_URL=postgresql://...
+# Frontend Vercel project (Root Directory: frontend)
+NEXT_PUBLIC_API_URL=https://upi-fraud-detection-api.vercel.app
+
+# FastAPI Vercel project (Root Directory: repository root)
+ALLOWED_ORIGINS=https://upi-fraud-detection-ml.vercel.app
 ```
 
-## Deploy
+`NEXT_PUBLIC_API_URL` is intentionally public: Next.js embeds it in the
+browser bundle at build time. Redeploy the frontend after changing it. In
+contrast, `ALLOWED_ORIGINS` and an optional `DATABASE_URL` belong only to the
+FastAPI project. Use a comma-separated `ALLOWED_ORIGINS` value if more than
+one frontend origin must be accepted.
 
-### API → Render
+`DATABASE_URL` is deliberately unset for the current public demo. Configure it
+only on the FastAPI project when durable prediction history is required; until
+then, `/api/predictions` returns no stored history and prediction responses set
+`saved_to_history` to `false`.
 
-The included [`render.yaml`](render.yaml) starts `uvicorn api.main:app` from
-the repository root. Import the repository in Render, then set
-`DATABASE_URL` (optional) and `ALLOWED_ORIGINS` (your Vercel URL). Keep the
-`data/` and `models/` artifacts available to the service.
+## Deployment
 
-### Frontend → Vercel
+### Current public deployment → Vercel
 
-Import the same repository as a separate Vercel project and set its **Root
-Directory** to `frontend`. Vercel will detect the Next.js app and use its
-default build configuration. Set `NEXT_PUBLIC_API_URL` to the deployed FastAPI
-HTTPS URL, redeploy, then copy the Vercel URL into Render's `ALLOWED_ORIGINS`.
+| Project | Public URL | Root Directory | Runtime |
+| --- | --- | --- | --- |
+| Frontend | [upi-fraud-detection-ml.vercel.app](https://upi-fraud-detection-ml.vercel.app) | `frontend` | Next.js |
+| Inference API | [upi-fraud-detection-api.vercel.app](https://upi-fraud-detection-api.vercel.app) | repository root | FastAPI |
+
+Both projects deploy from the same repository, but they must remain separate:
+the frontend contains the browser UI and the root-level API deployment needs
+access to the saved `models/` artifacts and `data/transactions.csv`. Keep
+those files available in the API deployment.
 
 Vercel’s documented monorepo workflow supports deploying a subdirectory as a
-separate project; using `frontend` as the root keeps the heavy ML service out
-of Vercel’s frontend deployment. [Vercel monorepo documentation](https://vercel.com/docs/monorepos)
+separate project; using `frontend` as the frontend root keeps the ML inference
+service independent of the browser build. [Vercel monorepo documentation](https://vercel.com/docs/monorepos)
+
+### Alternative API hosting → Render
+
+The included [`render.yaml`](render.yaml) starts `uvicorn api.main:app` from
+the repository root. Render remains an optional alternative if the API is
+moved off Vercel. In that case, set the frontend's `NEXT_PUBLIC_API_URL` to the
+Render HTTPS URL, redeploy the frontend, and set Render's `ALLOWED_ORIGINS` to
+the frontend URL. Keep `data/` and `models/` artifacts available to the
+service.
 
 ## Security and responsible use
 
@@ -368,8 +406,8 @@ reviewable workflow:
 - [ ] Replace the synthetic fixture with a documented public digital-payments
   dataset, retrain, and record the actual holdout metrics.
 - [ ] Configure Neon PostgreSQL if durable prediction history is required.
-- [ ] Deploy the FastAPI service and Next.js frontend, then configure their
-  cross-origin URLs.
+- [x] Deploy the FastAPI service and Next.js frontend as separate Vercel
+  projects and configure their production cross-origin URLs.
 - [ ] Add authentication, rate limiting, monitoring, and a human-review design
   only if the scope expands beyond a supervised capstone demonstration.
 
