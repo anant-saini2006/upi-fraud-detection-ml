@@ -480,22 +480,45 @@ def _split_raw_data(
     y: pd.Series,
     *,
     random_state: int,
+    time_split: bool = False,
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """Create an outer holdout and an inner validation split, all stratified."""
-    X_development, X_holdout, y_development, y_holdout = train_test_split(
-        X_raw,
-        y,
-        test_size=OUTER_TEST_SIZE,
-        stratify=y,
-        random_state=random_state,
-    )
-    X_selection_train, X_validation, y_selection_train, y_validation = train_test_split(
-        X_development,
-        y_development,
-        test_size=VALIDATION_SIZE_OF_DEVELOPMENT,
-        stratify=y_development,
-        random_state=random_state,
-    )
+    """Create an outer holdout and an inner validation split, stratified or chronological."""
+    if time_split and "step" in X_raw.columns:
+        sorted_indices = X_raw.sort_values("step", kind="stable").index
+        n_total = len(sorted_indices)
+        dev_cutoff = int(n_total * (1.0 - OUTER_TEST_SIZE))
+        dev_idx = sorted_indices[:dev_cutoff]
+        holdout_idx = sorted_indices[dev_cutoff:]
+
+        X_development = X_raw.loc[dev_idx]
+        y_development = y.loc[dev_idx]
+        X_holdout = X_raw.loc[holdout_idx]
+        y_holdout = y.loc[holdout_idx]
+
+        n_dev = len(dev_idx)
+        val_cutoff = int(n_dev * (1.0 - VALIDATION_SIZE_OF_DEVELOPMENT))
+        train_idx = dev_idx[:val_cutoff]
+        val_idx = dev_idx[val_cutoff:]
+
+        X_selection_train = X_raw.loc[train_idx]
+        y_selection_train = y.loc[train_idx]
+        X_validation = X_raw.loc[val_idx]
+        y_validation = y.loc[val_idx]
+    else:
+        X_development, X_holdout, y_development, y_holdout = train_test_split(
+            X_raw,
+            y,
+            test_size=OUTER_TEST_SIZE,
+            stratify=y,
+            random_state=random_state,
+        )
+        X_selection_train, X_validation, y_selection_train, y_validation = train_test_split(
+            X_development,
+            y_development,
+            test_size=VALIDATION_SIZE_OF_DEVELOPMENT,
+            stratify=y_development,
+            random_state=random_state,
+        )
     return (
         X_development,
         X_holdout,
@@ -514,8 +537,10 @@ def train(
     dataset_source: str | None = None,
     dataset_kind: str = "auto",
     random_state: int = RANDOM_STATE,
+    time_split: bool = False,
 ) -> tuple[Any, pd.DataFrame, dict[str, Any]]:
     """Run the full leakage-safe training workflow and persist artifacts."""
+
     print("Loading and validating labelled transaction data…")
     frame, provenance = load_and_validate_dataset(
         data_path,
@@ -537,7 +562,12 @@ def train(
         X_validation,
         y_selection_train,
         y_validation,
-    ) = _split_raw_data(X_raw, y, random_state=random_state)
+    ) = _split_raw_data(
+        X_raw,
+        y,
+        random_state=random_state,
+        time_split=time_split,
+    )
 
     # ── Model selection: train + validation only ─────────────────────────
     print("\nPreparing development training partition (preprocessing + SMOTENC)…")
@@ -662,8 +692,9 @@ def train(
                 "precision, F1, PR-AUC, and ROC-AUC."
             ),
             "outer_holdout": {
-                "strategy": "stratified train/test split",
+                "strategy": "chronological (step-based) split" if time_split else "stratified train/test split",
                 "test_size": OUTER_TEST_SIZE,
+                "time_split": time_split,
                 "development_rows": int(len(X_development)),
                 "holdout_rows": int(len(X_holdout)),
                 "development_class_counts": _class_counts(y_development),
@@ -755,6 +786,12 @@ def parse_args() -> argparse.Namespace:
         default=RANDOM_STATE,
         help=f"Random seed for all split/resampling/model steps (default: {RANDOM_STATE}).",
     )
+    parser.add_argument(
+        "--time-split",
+        action="store_true",
+        default=False,
+        help="Use chronological (step-based) split instead of random stratified split.",
+    )
     return parser.parse_args()
 
 
@@ -765,6 +802,7 @@ def main() -> None:
         dataset_source=args.dataset_source,
         dataset_kind=args.dataset_kind,
         random_state=args.random_state,
+        time_split=args.time_split,
     )
 
 

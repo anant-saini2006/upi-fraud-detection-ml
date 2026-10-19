@@ -1,7 +1,8 @@
 'use client';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { ReactNode } from 'react';
+import { ReactNode, useEffect, useState } from 'react';
+import { api } from '@/lib/api';
 
 const navItems = [
   { href: '/', icon: 'dashboard', label: 'Dashboard' },
@@ -11,8 +12,23 @@ const navItems = [
   { href: '/about', icon: 'info', label: 'About' },
 ];
 
+const gatewayNavItems = [
+  { href: '/shop', icon: 'storefront', label: 'Demo Store' },
+  { href: '/admin', icon: 'admin_panel_settings', label: 'Admin Console' },
+];
+
 export default function AppShell({ children }: { children: ReactNode }) {
   const pathname = usePathname();
+  const [reviewCount, setReviewCount] = useState(0);
+
+  useEffect(() => {
+    const fetchReviewCount = () => {
+      api.adminReviewCount().then(r => setReviewCount(r.count)).catch(() => {});
+    };
+    fetchReviewCount();
+    const interval = setInterval(fetchReviewCount, 5000);
+    return () => clearInterval(interval);
+  }, []);
 
   return (
     <div className="min-h-screen flex bg-bg-main">
@@ -32,7 +48,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-4">
+        <nav className="flex-1 p-4 overflow-y-auto">
           <ul className="space-y-1">
             {navItems.map((item) => {
               const isActive = pathname === item.href;
@@ -58,6 +74,41 @@ export default function AppShell({ children }: { children: ReactNode }) {
               );
             })}
           </ul>
+
+          {/* Gateway section */}
+          <div className="mt-5 pt-4 border-t border-border-light">
+            <p className="px-4 pb-2 text-[10px] font-semibold uppercase tracking-wider text-text-muted">Payment Gateway</p>
+            <ul className="space-y-1">
+              {gatewayNavItems.map((item) => {
+                const isActive = pathname === item.href || pathname.startsWith(item.href + '/');
+                return (
+                  <li key={item.href}>
+                    <Link
+                      href={item.href}
+                      className={`flex items-center gap-3 px-4 py-2.5 rounded-lg text-sm font-medium transition-all duration-200
+                        ${isActive
+                          ? 'bg-primary text-white shadow-md shadow-primary/25'
+                          : 'text-text-secondary hover:bg-gray-100 hover:text-text-primary'
+                        }`}
+                    >
+                      <span
+                        className="material-symbols-outlined text-xl"
+                        style={isActive ? { fontVariationSettings: "'FILL' 1" } : {}}
+                      >
+                        {item.icon}
+                      </span>
+                      {item.label}
+                      {item.href === '/admin' && reviewCount > 0 && (
+                        <span className="ml-auto px-1.5 py-0.5 rounded-full bg-danger text-white text-[10px] font-bold leading-none">
+                          {reviewCount}
+                        </span>
+                      )}
+                    </Link>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
         </nav>
 
         {/* Footer badge */}
@@ -78,7 +129,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
         <header className="bg-bg-card border-b border-border-light px-6 py-3 flex items-center justify-between sticky top-0 z-30">
           <div className="flex items-center gap-3">
             <h2 className="text-lg font-semibold text-text-primary capitalize">
-              {navItems.find(n => n.href === pathname)?.label || 'Dashboard'}
+              {[...navItems, ...gatewayNavItems].find(n => n.href === pathname)?.label || 'Dashboard'}
             </h2>
           </div>
           <div className="flex items-center gap-2">
@@ -89,10 +140,14 @@ export default function AppShell({ children }: { children: ReactNode }) {
             <button className="p-2 text-text-secondary hover:text-text-primary hover:bg-gray-100 rounded-lg transition-colors">
               <span className="material-symbols-outlined text-xl">call</span>
             </button>
-            <button className="p-2 text-text-secondary hover:text-text-primary hover:bg-gray-100 rounded-lg transition-colors relative">
+            <Link href="/admin/reviews" className="p-2 text-text-secondary hover:text-text-primary hover:bg-gray-100 rounded-lg transition-colors relative">
               <span className="material-symbols-outlined text-xl">notifications</span>
-              <span className="absolute top-1.5 right-1.5 w-2 h-2 bg-danger rounded-full"></span>
-            </button>
+              {reviewCount > 0 && (
+                <span className="absolute top-1 right-1 min-w-[16px] h-4 flex items-center justify-center px-1 rounded-full bg-danger text-white text-[10px] font-bold leading-none">
+                  {reviewCount}
+                </span>
+              )}
+            </Link>
             <div className="flex items-center gap-2 ml-2 pl-3 border-l border-border-light">
               <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center">
                 <span className="material-symbols-outlined text-primary text-lg">person</span>

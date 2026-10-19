@@ -41,3 +41,8 @@ transactions.db
 # files (for example .env.local) remain ignored.
 !.env.example
 !frontend/.env.example
+.neon
+node_modules/
+.agents/
+skills-lock.json
+neon.ts

@@ -4,28 +4,57 @@
  * All components import from here — single source of truth for API calls.
  */
 
-// In development the FastAPI service normally runs on port 8000. Production
-// deployments must set NEXT_PUBLIC_API_URL to the deployed HTTPS API URL.
-// Treat a missing *or blank* deployment variable as unset. Vercel can detect
-// keys from .env.example before a production API URL has been entered.
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000').replace(/\/$/, '');
+const API_BASE = (process.env.NEXT_PUBLIC_API_URL?.trim() || (typeof window !== 'undefined' ? '' : 'http://localhost:8000')).replace(/\/$/, '');
+const GATEWAY_TEST_KEY = process.env.NEXT_PUBLIC_GATEWAY_KEY?.trim() || 'sk_test_demo_key_001';
 
-async function get<T>(path: string): Promise<T> {
-  const res = await fetch(`${API_BASE}${path}`, { cache: 'no-store' });
-  if (!res.ok) throw new Error(`API error ${res.status}: ${path}`);
-  return res.json() as Promise<T>;
+// Admin session storage helpers
+export function getAdminToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('admin_session_token');
 }
 
-async function post<T>(path: string, body: unknown): Promise<T> {
+export function setAdminToken(token: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('admin_session_token', token);
+  }
+}
+
+export function clearAdminToken(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('admin_session_token');
+  }
+}
+
+async function request<T>(
+  path: string,
+  options: {
+    method?: string;
+    body?: unknown;
+    headers?: Record<string, string>;
+  } = {}
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    ...(options.headers || {}),
+  };
+
   const res = await fetch(`${API_BASE}${path}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    method: options.method || 'GET',
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
     cache: 'no-store',
   });
+
   if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`API error ${res.status}: ${err}`);
+    let errorDetail = `API error ${res.status}`;
+    try {
+      const errorJson = await res.json();
+      errorDetail = errorJson.detail || errorDetail;
+    } catch {
+      const text = await res.text();
+      if (text) errorDetail = text;
+    }
+    throw new Error(errorDetail);
   }
   return res.json() as Promise<T>;
 }
@@ -149,17 +178,190 @@ export interface CsvAnalysis {
   };
 }
 
+// ── Gateway & Admin Types ─────────────────────────────────────────────────────
+
+export interface ScoringResponse {
+  probability: number;
+  label: 'FRAUD' | 'LEGITIMATE';
+  risk_band: 'LOW' | 'MEDIUM' | 'HIGH';
+  reasons: string[];
+  top_reasons?: string[];
+}
+
+export interface PaymentIntent {
+  id: string;
+  amount: number;
+  currency: string;
+  sender_vpa: string;
+  receiver_vpa: string;
+  description: string | null;
+  status: 'requires_payment_method' | 'processing' | 'succeeded' | 'requires_review' | 'blocked';
+  scoring: ScoringResponse | null;
+  decline_reason: string | null;
+  created_at: string;
+  confirmed_at: string | null;
+  simulated_hour: number | null;
+  scenario_tag: string | null;
+  idempotency_key?: string | null;
+  origin_balance_before?: number | null;
+  origin_balance_after?: number | null;
+  destination_balance_before?: number | null;
+  destination_balance_after?: number | null;
+}
+
+export interface ThresholdSettings {
+  block_threshold: number;
+  review_threshold: number;
+}
+
+export interface AccountInfo {
+  vpa: string;
+  display_name: string;
+  wallet_balance: number;
+  total_sent: number;
+  total_received: number;
+  tx_count: number;
+}
+
+export interface ReviewRecord {
+  id: number;
+  payment_id: string;
+  reviewer: string;
+  verdict: 'approved' | 'confirmed_fraud';
+  note: string | null;
+  created_at: string;
+}
+
 // ── API functions ─────────────────────────────────────────────────────────────
 
 export const api = {
-  stats:              ()          => get<Stats>('/api/stats'),
-  fraudByType:        ()          => get<FraudByTypeRow[]>('/api/charts/fraud-by-type'),
-  fraudByHour:        ()          => get<FraudByHourRow[]>('/api/charts/fraud-by-hour'),
-  amountDistribution: ()          => get<AmountDistribution>('/api/charts/amount-distribution'),
-  predict:            (body: PredictionInput) => post<PredictionResult>('/api/predict', body),
-  performance:        ()          => get<PerformanceData>('/api/performance'),
-  datasetInfo:        ()          => get<DatasetInfo>('/api/dataset-info'),
-  recentPredictions:  (limit = 10) => get<PredictionHistory>(`/api/predictions?limit=${limit}`),
+  // Existing Model & Dashboard Endpoints
+  stats:              () => request<Stats>('/api/stats'),
+  fraudByType:        () => request<FraudByTypeRow[]>('/api/charts/fraud-by-type'),
+  fraudByHour:        () => request<FraudByHourRow[]>('/api/charts/fraud-by-hour'),
+  amountDistribution: () => request<AmountDistribution>('/api/charts/amount-distribution'),
+  predict:            (body: PredictionInput) => request<PredictionResult>('/api/predict', { method: 'POST', body }),
+  performance:        () => request<PerformanceData>('/api/performance'),
+  datasetInfo:        () => request<DatasetInfo>('/api/dataset-info'),
+  recentPredictions:  (limit = 10) => request<PredictionHistory>(`/api/predictions?limit=${limit}`),
+  warmup:             () => request<{ status: string }>('/api/warmup'),
+
+  // Gateway API (Test Mode)
+  createPaymentIntent: (
+    data: { amount: number; sender_vpa: string; receiver_vpa: string; description?: string; currency?: string; scenario_tag?: string },
+    idempotencyKey?: string
+  ) =>
+    request<PaymentIntent>('/v1/payment_intents', {
+      method: 'POST',
+      body: data,
+      headers: {
+        Authorization: `Bearer ${GATEWAY_TEST_KEY}`,
+        ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+      },
+    }),
+
+  confirmPaymentIntent: (id: string, simulated_hour?: number) =>
+    request<PaymentIntent>(`/v1/payment_intents/${id}/confirm`, {
+      method: 'POST',
+      body: { simulated_hour },
+      headers: {
+        Authorization: `Bearer ${GATEWAY_TEST_KEY}`,
+      },
+    }),
+
+  getPaymentIntent: (id: string) =>
+    request<PaymentIntent>(`/v1/payment_intents/${id}`, {
+      method: 'GET',
+      headers: {
+        Authorization: `Bearer ${GATEWAY_TEST_KEY}`,
+      },
+    }),
+
+  // Admin API
+  adminLogin: (body: { username: string; password: string }) =>
+    request<{ token: string; username: string }>('/api/admin/login', {
+      method: 'POST',
+      body,
+    }),
+
+  adminListPayments: (limit = 50, status?: string) => {
+    const token = getAdminToken();
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (status) query.set('status', status);
+    return request<{ payments: PaymentIntent[]; total: number }>(`/api/admin/payments?${query.toString()}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminGetPayment: (id: string) => {
+    const token = getAdminToken();
+    return request<{ payment: PaymentIntent; reviews: ReviewRecord[] }>(`/api/admin/payments/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminReviewCount: () => {
+    const token = getAdminToken();
+    return request<{ count: number }>('/api/admin/review-count', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminListReviews: () => {
+    const token = getAdminToken();
+    return request<{ payments: PaymentIntent[]; total: number }>('/api/admin/reviews', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminSubmitReview: (paymentId: string, verdict: 'approved' | 'confirmed_fraud', note?: string) => {
+    const token = getAdminToken();
+    return request<ReviewRecord>(`/api/admin/reviews/${paymentId}`, {
+      method: 'POST',
+      body: { verdict, note },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminGetSettings: () => {
+    const token = getAdminToken();
+    return request<ThresholdSettings>('/api/admin/settings', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminUpdateSettings: (settings: ThresholdSettings) => {
+    const token = getAdminToken();
+    return request<ThresholdSettings>('/api/admin/settings', {
+      method: 'PUT',
+      body: settings,
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminListAccounts: () => {
+    const token = getAdminToken();
+    return request<{ accounts: AccountInfo[] }>('/api/admin/accounts', {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminSimulate: (count = 50) => {
+    const token = getAdminToken();
+    return request<{ simulated: number; results: Record<string, number> }>('/api/admin/simulate', {
+      method: 'POST',
+      body: { count },
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
+
+  adminReset: () => {
+    const token = getAdminToken();
+    return request<{ status: string; message: string }>('/api/admin/reset', {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+  },
 };
 
 export async function analyseCSV(file: File): Promise<CsvAnalysis> {

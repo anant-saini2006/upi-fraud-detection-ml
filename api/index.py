@@ -251,11 +251,12 @@ allowed_origins = [
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins,
-    allow_credentials=False,
-    allow_methods=["GET", "POST"],
-    allow_headers=["Content-Type"],
+    allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
+    allow_credentials=True,
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_headers=["*"],
 )
+
 
 
 class TransactionInput(BaseModel):
@@ -613,3 +614,34 @@ async def analyse_csv(file: UploadFile = File(...)) -> dict[str, Any]:
                 }
 
     return result
+
+
+@app.get("/api/warmup")
+def warmup() -> dict[str, Any]:
+    """Warm up model artifacts and run a dummy scoring pass."""
+    _load_artifacts()
+    model, preprocessor = _require_inference_artifacts()
+    dummy_input = pd.DataFrame(
+        [
+            {
+                "step": 12,
+                "type": "PAYMENT",
+                "amount": 100.0,
+                "oldbalanceOrg": 500.0,
+                "newbalanceOrig": 400.0,
+                "oldbalanceDest": 0.0,
+                "newbalanceDest": 0.0,
+            }
+        ]
+    )
+    transformed = preprocessor.transform(_raw_features(dummy_input))
+    prob = float(_fraud_probabilities(model, transformed)[0])
+    return {"status": "warm", "dummy_probability": round(prob, 4)}
+
+
+# Mount gateway and admin routers
+from api.gateway import router as gateway_router  # noqa: E402
+from api.admin import router as admin_router      # noqa: E402
+
+app.include_router(gateway_router)
+app.include_router(admin_router)
