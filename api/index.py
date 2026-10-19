@@ -21,8 +21,9 @@ from typing import Any, Literal
 import joblib
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
 from sklearn.metrics import (
     accuracy_score,
@@ -257,6 +258,19 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
+
+
+@app.exception_handler(404)
+async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
+    return JSONResponse(
+        status_code=404,
+        content={
+            "detail": "Not Found",
+            "received_path": request.url.path,
+            "scope_path": request.scope.get("path"),
+            "scope_root_path": request.scope.get("root_path"),
+        },
+    )
 
 
 
