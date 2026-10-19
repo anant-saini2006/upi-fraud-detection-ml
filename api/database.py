@@ -163,6 +163,82 @@ _DEFAULT_SETTINGS = {
     "review_threshold": 0.30,
 }
 
+_MEMORY_ACCOUNTS: dict[str, dict[str, Any]] = {
+    vpa: {
+        "vpa": vpa,
+        "display_name": name,
+        "wallet_balance": bal,
+        "total_sent": 0.0,
+        "total_received": 0.0,
+        "tx_count": 0,
+    }
+    for vpa, name, bal in _SEED_ACCOUNTS
+}
+_MEMORY_PAYMENTS: dict[str, dict[str, Any]] = {
+    "pi_demo_clean_001": {
+        "id": "pi_demo_clean_001",
+        "idempotency_key": "idemp_clean_001",
+        "amount": 450.0,
+        "currency": "INR",
+        "sender_vpa": "alice@testpay",
+        "receiver_vpa": "bob@testpay",
+        "description": "Daytime coffee payment",
+        "fraud_probability": 0.0012,
+        "fraud_label": "LEGITIMATE",
+        "risk_band": "LOW",
+        "reasons": ["Standard transaction hour", "Low transaction amount"],
+        "status": "succeeded",
+        "decline_reason": None,
+        "created_at": "2026-10-19T10:15:00Z",
+        "confirmed_at": "2026-10-19T10:15:01Z",
+        "reviewed_at": None,
+        "simulated_hour": 14,
+        "scenario_tag": "daytime_coffee",
+    },
+    "pi_demo_review_002": {
+        "id": "pi_demo_review_002",
+        "idempotency_key": "idemp_review_002",
+        "amount": 45000.0,
+        "currency": "INR",
+        "sender_vpa": "eve@testpay",
+        "receiver_vpa": "mallory@testpay",
+        "description": "Late-night mule transfer",
+        "fraud_probability": 0.4521,
+        "fraud_label": "REVIEW",
+        "risk_band": "MEDIUM",
+        "reasons": ["Night off-hours (02:00)", "High amount transfer to new recipient"],
+        "status": "requires_review",
+        "decline_reason": "Flagged for manual compliance review",
+        "created_at": "2026-10-19T02:30:00Z",
+        "confirmed_at": "2026-10-19T02:30:02Z",
+        "reviewed_at": None,
+        "simulated_hour": 2,
+        "scenario_tag": "night_mule",
+    },
+    "pi_demo_drain_003": {
+        "id": "pi_demo_drain_003",
+        "idempotency_key": "idemp_drain_003",
+        "amount": 80000.0,
+        "currency": "INR",
+        "sender_vpa": "eve@testpay",
+        "receiver_vpa": "mallory@testpay",
+        "description": "Full wallet balance liquidation",
+        "fraud_probability": 0.9998,
+        "fraud_label": "FRAUD",
+        "risk_band": "HIGH",
+        "reasons": ["Zero remaining sender balance (account drain)", "Abnormal burst volume"],
+        "status": "blocked",
+        "decline_reason": "High fraud probability — blocked by automated policy",
+        "created_at": "2026-10-19T03:00:00Z",
+        "confirmed_at": "2026-10-19T03:00:01Z",
+        "reviewed_at": None,
+        "simulated_hour": 3,
+        "scenario_tag": "account_drain",
+    },
+}
+_MEMORY_REVIEWS: list[dict[str, Any]] = []
+_MEMORY_SETTINGS: dict[str, Any] = dict(_DEFAULT_SETTINGS)
+
 
 def initialise_database() -> bool:
     """Create all tables and seed data when PostgreSQL is configured.
@@ -299,7 +375,7 @@ def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
 def get_account(vpa: str) -> Optional[dict[str, Any]]:
     """Return account info for a VPA, or None if not found."""
     if not is_configured():
-        return None
+        return _MEMORY_ACCOUNTS.get(vpa)
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -313,7 +389,7 @@ def get_account(vpa: str) -> Optional[dict[str, Any]]:
                 )
                 row = cursor.fetchone()
         if row is None:
-            return None
+            return _MEMORY_ACCOUNTS.get(vpa)
         return {
             "vpa": str(row[0]),
             "display_name": str(row[1]),
@@ -323,13 +399,13 @@ def get_account(vpa: str) -> Optional[dict[str, Any]]:
             "tx_count": int(row[5]),
         }
     except Exception:
-        return None
+        return _MEMORY_ACCOUNTS.get(vpa)
 
 
 def list_accounts() -> list[dict[str, Any]]:
     """Return all accounts."""
     if not is_configured():
-        return []
+        return list(_MEMORY_ACCOUNTS.values())
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -353,7 +429,7 @@ def list_accounts() -> list[dict[str, Any]]:
             for r in rows
         ]
     except Exception:
-        return []
+        return list(_MEMORY_ACCOUNTS.values())
 
 
 def update_balances(
@@ -362,6 +438,18 @@ def update_balances(
     amount: float,
 ) -> bool:
     """Move money between two simulated wallets. Returns False on failure."""
+    if not is_configured():
+        s = _MEMORY_ACCOUNTS.get(sender_vpa)
+        r = _MEMORY_ACCOUNTS.get(receiver_vpa)
+        if not s or not r or s["wallet_balance"] < amount:
+            return False
+        s["wallet_balance"] -= amount
+        s["total_sent"] += amount
+        s["tx_count"] += 1
+        r["wallet_balance"] += amount
+        r["total_received"] += amount
+        r["tx_count"] += 1
+        return True
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -391,7 +479,17 @@ def update_balances(
                 )
         return True
     except Exception:
-        return False
+        s = _MEMORY_ACCOUNTS.get(sender_vpa)
+        r = _MEMORY_ACCOUNTS.get(receiver_vpa)
+        if not s or not r or s["wallet_balance"] < amount:
+            return False
+        s["wallet_balance"] -= amount
+        s["total_sent"] += amount
+        s["tx_count"] += 1
+        r["wallet_balance"] += amount
+        r["total_received"] += amount
+        r["tx_count"] += 1
+        return True
 
 
 # ── Payment operations ───────────────────────────────────────────────────────
@@ -409,6 +507,35 @@ def create_payment(
     scenario_tag: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Create a payment intent. Returns the payment record or None on failure."""
+    if not is_configured():
+        if idempotency_key:
+            for p in _MEMORY_PAYMENTS.values():
+                if p.get("idempotency_key") == idempotency_key:
+                    return p
+        now = datetime.now(timezone.utc).isoformat()
+        rec = {
+            "id": payment_id,
+            "idempotency_key": idempotency_key,
+            "amount": amount,
+            "currency": currency,
+            "sender_vpa": sender_vpa,
+            "receiver_vpa": receiver_vpa,
+            "description": description,
+            "fraud_probability": None,
+            "fraud_label": None,
+            "risk_band": None,
+            "reasons": [],
+            "status": "requires_payment_method",
+            "decline_reason": None,
+            "created_at": now,
+            "confirmed_at": None,
+            "reviewed_at": None,
+            "simulated_hour": None,
+            "scenario_tag": scenario_tag,
+        }
+        _MEMORY_PAYMENTS[payment_id] = rec
+        return rec
+
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -422,7 +549,7 @@ def create_payment(
                     if existing:
                         return get_payment(existing[0])
 
-                now = datetime.now(timezone.utc)
+                now_dt = datetime.now(timezone.utc)
                 cursor.execute(
                     """
                     INSERT INTO payments (
@@ -438,17 +565,41 @@ def create_payment(
                         sender_vpa,
                         receiver_vpa,
                         description,
-                        now,
+                        now_dt,
                         scenario_tag,
                     ),
                 )
         return get_payment(payment_id)
     except Exception:
-        return None
+        now = datetime.now(timezone.utc).isoformat()
+        rec = {
+            "id": payment_id,
+            "idempotency_key": idempotency_key,
+            "amount": amount,
+            "currency": currency,
+            "sender_vpa": sender_vpa,
+            "receiver_vpa": receiver_vpa,
+            "description": description,
+            "fraud_probability": None,
+            "fraud_label": None,
+            "risk_band": None,
+            "reasons": [],
+            "status": "requires_payment_method",
+            "decline_reason": None,
+            "created_at": now,
+            "confirmed_at": None,
+            "reviewed_at": None,
+            "simulated_hour": None,
+            "scenario_tag": scenario_tag,
+        }
+        _MEMORY_PAYMENTS[payment_id] = rec
+        return rec
 
 
 def get_payment(payment_id: str) -> Optional[dict[str, Any]]:
     """Return a single payment record."""
+    if not is_configured():
+        return _MEMORY_PAYMENTS.get(payment_id)
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -466,7 +617,7 @@ def get_payment(payment_id: str) -> Optional[dict[str, Any]]:
                 )
                 row = cursor.fetchone()
         if row is None:
-            return None
+            return _MEMORY_PAYMENTS.get(payment_id)
         reasons_raw = row[10]
         if isinstance(reasons_raw, str):
             reasons_raw = json.loads(reasons_raw)
@@ -491,7 +642,7 @@ def get_payment(payment_id: str) -> Optional[dict[str, Any]]:
             "scenario_tag": row[17],
         }
     except Exception:
-        return None
+        return _MEMORY_PAYMENTS.get(payment_id)
 
 
 def update_payment_scoring(
@@ -507,6 +658,21 @@ def update_payment_scoring(
     scenario_tag: Optional[str] = None,
 ) -> bool:
     """Update a payment with scoring results after confirm."""
+    p = _MEMORY_PAYMENTS.get(payment_id)
+    if p:
+        p["status"] = status
+        p["fraud_probability"] = round(fraud_probability, 6)
+        p["fraud_label"] = fraud_label
+        p["risk_band"] = risk_band
+        p["reasons"] = reasons
+        p["decline_reason"] = decline_reason
+        p["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+        p["simulated_hour"] = simulated_hour
+        p["scenario_tag"] = scenario_tag
+
+    if not is_configured():
+        return True
+
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -538,7 +704,7 @@ def update_payment_scoring(
                 )
         return True
     except Exception:
-        return False
+        return p is not None
 
 
 def list_payments(
@@ -547,6 +713,13 @@ def list_payments(
     status_filter: Optional[str] = None,
 ) -> list[dict[str, Any]]:
     """Return recent payments, optionally filtered by status."""
+    if not is_configured():
+        items = list(_MEMORY_PAYMENTS.values())
+        if status_filter:
+            items = [p for p in items if p.get("status") == status_filter]
+        items.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+        return items[:limit]
+
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -598,11 +771,19 @@ def list_payments(
             for r in rows
         ]
     except Exception:
-        return []
+        items = list(_MEMORY_PAYMENTS.values())
+        if status_filter:
+            items = [p for p in items if p.get("status") == status_filter]
+        items.sort(key=lambda x: str(x.get("created_at") or ""), reverse=True)
+        return items[:limit]
 
 
 def count_reviews_pending() -> int:
     """Count payments in requires_review status."""
+    if not is_configured():
+        return sum(
+            1 for p in _MEMORY_PAYMENTS.values() if p.get("status") == "requires_review"
+        )
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -612,7 +793,9 @@ def count_reviews_pending() -> int:
                 row = cursor.fetchone()
         return int(row[0]) if row else 0
     except Exception:
-        return 0
+        return sum(
+            1 for p in _MEMORY_PAYMENTS.values() if p.get("status") == "requires_review"
+        )
 
 
 # ── Review operations ────────────────────────────────────────────────────────
@@ -626,6 +809,26 @@ def create_review(
     note: Optional[str] = None,
 ) -> Optional[dict[str, Any]]:
     """Record an admin review verdict and update the payment status."""
+    if not is_configured():
+        rev_id = len(_MEMORY_REVIEWS) + 1
+        now = datetime.now(timezone.utc).isoformat()
+        rev = {
+            "id": rev_id,
+            "payment_id": payment_id,
+            "reviewer": reviewer,
+            "verdict": verdict,
+            "note": note,
+            "created_at": now,
+        }
+        _MEMORY_REVIEWS.append(rev)
+        p = _MEMORY_PAYMENTS.get(payment_id)
+        if p:
+            p["status"] = "succeeded" if verdict == "approved" else "blocked"
+            p["reviewed_at"] = now
+            if verdict == "approved":
+                update_balances(p["sender_vpa"], p["receiver_vpa"], p["amount"])
+        return rev
+
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -695,11 +898,30 @@ def create_review(
             "created_at": created_at.isoformat() if created_at else None,
         }
     except Exception:
-        return None
+        rev_id = len(_MEMORY_REVIEWS) + 1
+        now = datetime.now(timezone.utc).isoformat()
+        rev = {
+            "id": rev_id,
+            "payment_id": payment_id,
+            "reviewer": reviewer,
+            "verdict": verdict,
+            "note": note,
+            "created_at": now,
+        }
+        _MEMORY_REVIEWS.append(rev)
+        p = _MEMORY_PAYMENTS.get(payment_id)
+        if p:
+            p["status"] = "succeeded" if verdict == "approved" else "blocked"
+            p["reviewed_at"] = now
+        return rev
 
 
 def list_reviews(payment_id: Optional[str] = None) -> list[dict[str, Any]]:
     """Return reviews, optionally filtered by payment ID."""
+    if not is_configured():
+        if payment_id:
+            return [r for r in _MEMORY_REVIEWS if r.get("payment_id") == payment_id]
+        return list(reversed(_MEMORY_REVIEWS[-100:]))
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -732,7 +954,9 @@ def list_reviews(payment_id: Optional[str] = None) -> list[dict[str, Any]]:
             for r in rows
         ]
     except Exception:
-        return []
+        if payment_id:
+            return [r for r in _MEMORY_REVIEWS if r.get("payment_id") == payment_id]
+        return list(reversed(_MEMORY_REVIEWS[-100:]))
 
 
 # ── Settings operations ──────────────────────────────────────────────────────
@@ -740,19 +964,21 @@ def list_reviews(payment_id: Optional[str] = None) -> list[dict[str, Any]]:
 
 def get_setting(key: str) -> Any:
     """Return a setting value, or None if not found."""
+    if not is_configured():
+        return _MEMORY_SETTINGS.get(key)
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute("SELECT value FROM settings WHERE key = %s", (key,))
                 row = cursor.fetchone()
         if row is None:
-            return None
+            return _MEMORY_SETTINGS.get(key)
         value = row[0]
         if isinstance(value, str):
             return json.loads(value)
         return value
     except Exception:
-        return None
+        return _MEMORY_SETTINGS.get(key)
 
 
 def get_thresholds() -> dict[str, float]:
@@ -767,6 +993,9 @@ def get_thresholds() -> dict[str, float]:
 
 def update_setting(key: str, value: Any) -> bool:
     """Upsert a setting value."""
+    _MEMORY_SETTINGS[key] = value
+    if not is_configured():
+        return True
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -781,7 +1010,7 @@ def update_setting(key: str, value: Any) -> bool:
                 )
         return True
     except Exception:
-        return False
+        return True
 
 
 # ── Demo reset ───────────────────────────────────────────────────────────────
@@ -789,6 +1018,22 @@ def update_setting(key: str, value: Any) -> bool:
 
 def reset_demo() -> bool:
     """Reset all demo data: clear payments/reviews, restore wallet balances."""
+    global _MEMORY_ACCOUNTS, _MEMORY_PAYMENTS, _MEMORY_REVIEWS
+    _MEMORY_ACCOUNTS = {
+        vpa: {
+            "vpa": vpa,
+            "display_name": name,
+            "wallet_balance": bal,
+            "total_sent": 0.0,
+            "total_received": 0.0,
+            "tx_count": 0,
+        }
+        for vpa, name, bal in _SEED_ACCOUNTS
+    }
+    _MEMORY_PAYMENTS = {}
+    _MEMORY_REVIEWS = []
+    if not is_configured():
+        return True
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
@@ -812,7 +1057,7 @@ def reset_demo() -> bool:
                     )
         return True
     except Exception:
-        return False
+        return True
 
 
 # ── Health status ────────────────────────────────────────────────────────────
