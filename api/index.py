@@ -273,10 +273,11 @@ async def strip_vercel_prefix(request: Request, call_next: Any) -> Any:
 
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
+    detail = getattr(exc, "detail", None) or "Not Found"
     return JSONResponse(
         status_code=404,
         content={
-            "detail": "Not Found",
+            "detail": detail,
             "received_path": request.url.path,
             "scope_path": request.scope.get("path"),
             "scope_root_path": request.scope.get("root_path"),

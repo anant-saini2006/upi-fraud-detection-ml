@@ -39,6 +39,8 @@ for _env_path in [_ROOT / ".env", _ROOT / ".env.local"]:
             pass
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+if not DATABASE_URL:
+    DATABASE_URL = "postgresql://neondb_owner:npg_gY59xRjkvCqG@ep-morning-wildflower-b5lnuafo-pooler.c-7.us-east-2.aws.neon.tech/neondb?sslmode=require"
 _last_error: str | None = None
 
 
