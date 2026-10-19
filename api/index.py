@@ -238,6 +238,7 @@ app = FastAPI(
     ),
     version="1.1.0",
     lifespan=lifespan,
+    redirect_slashes=False,
 )
 
 allowed_origins = [
