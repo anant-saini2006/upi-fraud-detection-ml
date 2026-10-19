@@ -260,6 +260,17 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def strip_vercel_prefix(request: Request, call_next: Any) -> Any:
+    path = request.scope.get("path", "")
+    if path.startswith("/api/index"):
+        new_path = path[len("/api/index") :]
+        if not new_path.startswith("/"):
+            new_path = "/" + new_path
+        request.scope["path"] = new_path
+    return await call_next(request)
+
+
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
     return JSONResponse(
