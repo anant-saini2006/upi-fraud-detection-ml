@@ -24,6 +24,7 @@ import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 from pydantic import BaseModel, Field, field_validator
 from sklearn.metrics import (
     accuracy_score,
@@ -242,33 +243,31 @@ app = FastAPI(
     redirect_slashes=False,
 )
 
-allowed_origins = [
-    origin.strip()
-    # Both names resolve to the local machine, but browsers treat them as
-    # different origins. Allow each for a frictionless local demo.
-    for origin in os.getenv(
-        "ALLOWED_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000"
-    ).split(",")
-    if origin.strip()
-]
+class StripVercelPrefixMiddleware:
+    """Pure ASGI middleware to normalize paths rewritten by Vercel."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            path = scope.get("path", "")
+            if path.startswith("/api/index"):
+                new_path = path[len("/api/index") :]
+                if not new_path.startswith("/"):
+                    new_path = "/" + new_path
+                scope["path"] = new_path
+        await self.app(scope, receive, send)
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=allowed_origins if "*" not in allowed_origins else ["*"],
-    allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-@app.middleware("http")
-async def strip_vercel_prefix(request: Request, call_next: Any) -> Any:
-    path = request.scope.get("path", "")
-    if path.startswith("/api/index"):
-        new_path = path[len("/api/index") :]
-        if not new_path.startswith("/"):
-            new_path = "/" + new_path
-        request.scope["path"] = new_path
-    return await call_next(request)
+app.add_middleware(StripVercelPrefixMiddleware)
 
 
 @app.exception_handler(404)
