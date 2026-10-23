@@ -308,24 +308,41 @@ class StripVercelPrefixMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
-            headers = dict(scope.get("headers", []))
-            matched_bytes = (
-                headers.get(b"x-matched-path")
-                or headers.get(b"x-vercel-matched-path")
-                or headers.get(b"x-forwarded-uri")
-            )
-            if matched_bytes:
-                matched_str = matched_bytes.decode("latin-1")
-                scope["path"] = matched_str.split("?")[0]
+            from urllib.parse import parse_qs, urlencode
+
+            raw_qs = scope.get("query_string", b"").decode("latin-1")
+            if "__path" in raw_qs:
+                qs = parse_qs(raw_qs, keep_blank_values=True)
+                if "__path" in qs and qs["__path"]:
+                    target_path = qs["__path"][0]
+                    if not target_path.startswith("/"):
+                        target_path = "/" + target_path
+                    while target_path.startswith("//"):
+                        target_path = target_path[1:]
+                    scope["path"] = target_path
+
+                    del qs["__path"]
+                    scope["query_string"] = urlencode(qs, doseq=True).encode("latin-1")
             else:
-                path = scope.get("path", "")
-                for prefix in ["/api/index.py", "/api/index"]:
-                    if path.startswith(prefix):
-                        path = path[len(prefix) :]
-                        if not path.startswith("/"):
-                            path = "/" + path
-                        scope["path"] = path
-                        break
+                headers = dict(scope.get("headers", []))
+                matched_bytes = (
+                    headers.get(b"x-matched-path")
+                    or headers.get(b"x-vercel-matched-path")
+                    or headers.get(b"x-forwarded-uri")
+                )
+                if matched_bytes:
+                    matched_str = matched_bytes.decode("latin-1")
+                    if not matched_str.startswith("/api/index"):
+                        scope["path"] = matched_str.split("?")[0]
+                else:
+                    path = scope.get("path", "")
+                    for prefix in ["/api/index.py", "/api/index"]:
+                        if path.startswith(prefix):
+                            path = path[len(prefix) :]
+                            if not path.startswith("/"):
+                                path = "/" + path
+                            scope["path"] = path
+                            break
         await self.app(scope, receive, send)
 
 
@@ -414,6 +431,17 @@ def root() -> dict[str, str]:
 @app.get("/api/ping")
 def ping() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/api/debug")
+@app.get("/debug")
+def debug(request: Request) -> dict[str, Any]:
+    return {
+        "url_path": request.url.path,
+        "scope_path": request.scope.get("path"),
+        "headers": dict(request.headers),
+    }
+
 
 
 @app.get("/api/health")
