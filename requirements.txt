@@ -12,7 +12,3 @@ python-multipart==0.0.20
 psycopg2-binary==2.9.10
 razorpay>=1.4.2
 sqlalchemy>=2.0
-
-# Useful for optional notebook-based EDA; the Next.js UI uses Recharts.
-matplotlib==3.9.1
-seaborn==0.13.2

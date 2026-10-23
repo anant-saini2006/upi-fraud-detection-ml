@@ -52,7 +52,8 @@ try:
         init_payment_tables,
     )
     _PAYMENTS_AVAILABLE = True
-except ImportError:
+except Exception as _p_exc:
+    warnings.warn(f"Payment integration disabled: {_p_exc}")
     _PAYMENTS_AVAILABLE = False
 
 
@@ -280,6 +281,35 @@ class StripVercelPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
+class GlobalCatchAllMiddleware:
+    """Catch any unhandled exception in request processing and return diagnostic JSON."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        import traceback
+
+        try:
+            await self.app(scope, receive, send)
+        except Exception as exc:
+            tb = traceback.format_exc()
+            response = JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Internal Server Error",
+                    "exception_type": type(exc).__name__,
+                    "detail": str(exc),
+                    "traceback": tb.splitlines()[-10:],
+                },
+            )
+            await response(scope, receive, send)
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -288,6 +318,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(StripVercelPrefixMiddleware)
+app.add_middleware(GlobalCatchAllMiddleware)
 
 # Include Razorpay payment routes if the integration is installed.
 if _PAYMENTS_AVAILABLE:
