@@ -308,13 +308,26 @@ class StripVercelPrefixMiddleware:
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "http":
-            path = scope.get("path", "")
-            if path.startswith("/api/index"):
-                new_path = path[len("/api/index") :]
-                if not new_path.startswith("/"):
-                    new_path = "/" + new_path
-                scope["path"] = new_path
+            headers = dict(scope.get("headers", []))
+            matched_bytes = (
+                headers.get(b"x-matched-path")
+                or headers.get(b"x-vercel-matched-path")
+                or headers.get(b"x-forwarded-uri")
+            )
+            if matched_bytes:
+                matched_str = matched_bytes.decode("latin-1")
+                scope["path"] = matched_str.split("?")[0]
+            else:
+                path = scope.get("path", "")
+                for prefix in ["/api/index.py", "/api/index"]:
+                    if path.startswith(prefix):
+                        path = path[len(prefix) :]
+                        if not path.startswith("/"):
+                            path = "/" + path
+                        scope["path"] = path
+                        break
         await self.app(scope, receive, send)
+
 
 
 app.add_middleware(
