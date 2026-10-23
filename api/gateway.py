@@ -18,9 +18,16 @@ from __future__ import annotations
 
 import os
 import secrets
+import sys
 import warnings
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any, Optional
+
+_ROOT = Path(__file__).resolve().parent.parent
+for _p in [str(_ROOT), str(_ROOT / "api")]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import numpy as np
 import pandas as pd

@@ -21,7 +21,12 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
+import sys
+
 _ROOT = Path(__file__).resolve().parent.parent
+for _p in [str(_ROOT), str(_ROOT / "api")]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 for _env_path in [_ROOT / ".env", _ROOT / ".env.local"]:
     if _env_path.is_file():

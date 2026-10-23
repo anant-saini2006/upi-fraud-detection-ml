@@ -13,10 +13,18 @@ from __future__ import annotations
 import io
 import json
 import os
+import sys
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, Literal, Optional
+
+# Ensure repository root and api directory are in sys.path for serverless runtimes
+_HERE = Path(__file__).resolve().parent
+_ROOT = _HERE.parent
+for _p in [str(_ROOT), str(_HERE)]:
+    if _p not in sys.path:
+        sys.path.insert(0, _p)
 
 import joblib
 import numpy as np
