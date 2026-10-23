@@ -46,12 +46,27 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
-from api.database import (
-    get_recent_predictions,
-    initialise_database,
-    record_prediction,
-    status as database_status,
-)
+try:
+    from api.database import (
+        get_recent_predictions,
+        initialise_database,
+        record_prediction,
+        status as database_status,
+    )
+except Exception as _db_exc:
+    warnings.warn(f"Database module unavailable: {_db_exc}")
+
+    def database_status() -> dict[str, Any]:
+        return {"configured": False, "available": False, "last_error": str(_db_exc)}
+
+    def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
+        return []
+
+    def record_prediction(**kwargs: Any) -> bool:
+        return False
+
+    def initialise_database() -> bool:
+        return False
 
 # Razorpay payment integration (optional — graceful if deps missing)
 try:
@@ -65,9 +80,18 @@ except Exception as _p_exc:
     _PAYMENTS_AVAILABLE = False
 
 
+def _find_path(*parts: str) -> Path:
+    rel = Path(*parts)
+    for base in [_ROOT, _HERE, Path.cwd(), Path("/var/task")]:
+        candidate = base / rel
+        if candidate.exists():
+            return candidate
+    return _ROOT / rel
+
+
 ROOT = Path(__file__).resolve().parent.parent
-MODELS_DIR = ROOT / "models"
-DATA_PATH = ROOT / "data" / "transactions.csv"
+MODELS_DIR = _find_path("models")
+DATA_PATH = _find_path("data", "transactions.csv")
 
 # PaySim-like raw columns accepted by the fitted preprocessor. The training
 # metadata can override this list, protecting inference from schema changes.
@@ -101,7 +125,7 @@ def _load_artifacts() -> None:
 
     dataset_file = DATA_PATH
     if not dataset_file.is_file():
-        sample_file = ROOT / "data" / "sample_transactions.csv"
+        sample_file = _find_path("data", "sample_transactions.csv")
         if sample_file.is_file():
             dataset_file = sample_file
 
