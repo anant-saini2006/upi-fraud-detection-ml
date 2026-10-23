@@ -260,23 +260,8 @@ def _feature_importance_data(model: Any) -> list[dict[str, Any]]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Persistence is optional in local development and serverless environments.
-    # A transient Neon failure or missing credentials must never crash API cold-starts.
-    try:
-        initialise_database()
-    except Exception as exc:
-        warnings.warn(f"Database initialization deferred: {exc}")
-
-    if _PAYMENTS_AVAILABLE:
-        try:
-            init_payment_tables()
-        except Exception as exc:
-            warnings.warn(f"Payment tables initialization deferred: {exc}")
-
-    try:
-        _load_artifacts()
-    except Exception as exc:
-        warnings.warn(f"Artifact loading deferred: {exc}")
+    # Keep startup non-blocking for serverless cold-starts.
+    # Database tables are already created and artifacts load lazily on demand.
     yield
 
 
@@ -308,35 +293,6 @@ class StripVercelPrefixMiddleware:
         await self.app(scope, receive, send)
 
 
-class GlobalCatchAllMiddleware:
-    """Catch any unhandled exception in request processing and return diagnostic JSON."""
-
-    def __init__(self, app: ASGIApp) -> None:
-        self.app = app
-
-    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http":
-            await self.app(scope, receive, send)
-            return
-
-        import traceback
-
-        try:
-            await self.app(scope, receive, send)
-        except Exception as exc:
-            tb = traceback.format_exc()
-            response = JSONResponse(
-                status_code=500,
-                content={
-                    "error": "Internal Server Error",
-                    "exception_type": type(exc).__name__,
-                    "detail": str(exc),
-                    "traceback": tb.splitlines()[-10:],
-                },
-            )
-            await response(scope, receive, send)
-
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -345,11 +301,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(StripVercelPrefixMiddleware)
-app.add_middleware(GlobalCatchAllMiddleware)
 
 # Include Razorpay payment routes if the integration is installed.
 if _PAYMENTS_AVAILABLE:
     app.include_router(payment_router)
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:
+    import traceback
+    return JSONResponse(
+        status_code=500,
+        content={
+            "error": "Internal Server Error",
+            "exception_type": type(exc).__name__,
+            "detail": str(exc),
+            "traceback": traceback.format_exc().splitlines()[-10:],
+        },
+    )
 
 
 @app.exception_handler(404)
@@ -765,12 +734,16 @@ def warmup() -> dict[str, Any]:
     return {"status": "warm", "dummy_probability": round(prob, 4)}
 
 
-# Mount gateway and admin routers
-from api.gateway import router as gateway_router  # noqa: E402
-from api.admin import router as admin_router      # noqa: E402
+# Mount gateway and admin routers safely
+try:
+    from api.gateway import router as gateway_router  # noqa: E402
+    app.include_router(gateway_router)
+except Exception as _gw_exc:
+    warnings.warn(f"Gateway router disabled: {_gw_exc}")
 
-app.include_router(gateway_router)
-app.include_router(admin_router)
+try:
+    from api.admin import router as admin_router      # noqa: E402
+    app.include_router(admin_router)
+except Exception as _adm_exc:
+    warnings.warn(f"Admin router disabled: {_adm_exc}")
 
-# Export handler for Vercel Python serverless function compatibility
-handler = app
