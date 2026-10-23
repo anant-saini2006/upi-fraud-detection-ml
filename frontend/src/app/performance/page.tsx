@@ -162,12 +162,28 @@ export default function ModelPerformance() {
           iconColor: 'text-purple-600',
         },
         {
+          label: 'PR-AUC',
+          value: metrics.pr_auc !== undefined ? formatRatio(metrics.pr_auc) : 'N/A',
+          description: 'Precision-Recall AUC (imbalance-robust)',
+          icon: 'analytics',
+          iconBg: 'bg-emerald-100',
+          iconColor: 'text-emerald-600',
+        },
+        {
           label: 'ROC-AUC',
           value: formatRatio(metrics.roc_auc),
           description: 'Ranking performance across thresholds',
           icon: 'timeline',
           iconBg: 'bg-orange-100',
           iconColor: 'text-orange-600',
+        },
+        {
+          label: 'False Positive Rate',
+          value: metrics.false_positive_rate !== undefined ? formatRatio(metrics.false_positive_rate) : 'N/A',
+          description: 'Legitimate transactions misflagged',
+          icon: 'warning',
+          iconBg: 'bg-amber-100',
+          iconColor: 'text-amber-600',
         },
       ]
     : [];
@@ -219,8 +235,8 @@ export default function ModelPerformance() {
           )}
         </section>
 
-        <section aria-label="Primary evaluation metrics" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {isLoading && Array.from({ length: 4 }, (_, index) => <LoadingBlock key={index} className="h-[126px]" />)}
+        <section aria-label="Primary evaluation metrics" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-6 gap-4">
+          {isLoading && Array.from({ length: 6 }, (_, index) => <LoadingBlock key={index} className="h-[126px]" />)}
           {!isLoading && primaryMetrics.map((metric) => (
             <article key={metric.label} className="bg-bg-card rounded-xl border border-border-light p-5 shadow-card">
               <div className="flex items-start justify-between">
@@ -299,11 +315,13 @@ export default function ModelPerformance() {
                 <thead>
                   <tr className="bg-gray-50 text-text-muted text-xs uppercase tracking-wider">
                     <th scope="col" className="text-left px-5 py-3 font-medium">Model</th>
-                    <th scope="col" className="text-left px-5 py-3 font-medium">Accuracy</th>
-                    <th scope="col" className="text-left px-5 py-3 font-medium">Precision</th>
                     <th scope="col" className="text-left px-5 py-3 font-medium">Recall</th>
+                    <th scope="col" className="text-left px-5 py-3 font-medium">Precision</th>
                     <th scope="col" className="text-left px-5 py-3 font-medium">F1 score</th>
+                    <th scope="col" className="text-left px-5 py-3 font-medium">PR-AUC</th>
                     <th scope="col" className="text-left px-5 py-3 font-medium">ROC-AUC</th>
+                    <th scope="col" className="text-left px-5 py-3 font-medium">FPR</th>
+                    <th scope="col" className="text-left px-5 py-3 font-medium">Accuracy</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border-light">
@@ -322,11 +340,13 @@ export default function ModelPerformance() {
                             )}
                           </div>
                         </td>
-                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.Accuracy)}</td>
-                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.Precision)}</td>
                         <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.Recall)}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.Precision)}</td>
                         <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.F1)}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row['PR-AUC'] ?? 0)}</td>
                         <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row['ROC-AUC'])}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.FPR ?? row['False Positive Rate'] ?? 0)}</td>
+                        <td className="px-5 py-3 font-mono text-xs text-text-secondary">{formatRatio(row.Accuracy)}</td>
                       </tr>
                     );
                   })}

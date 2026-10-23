@@ -30,6 +30,7 @@ frontend/out/
 
 # SQLite (local only — Vercel doesn't use it)
 transactions.db
+payments_local.db
 
 # IDE
 .idea/
@@ -41,6 +42,7 @@ transactions.db
 # files (for example .env.local) remain ignored.
 !.env.example
 !frontend/.env.example
+!api/.env.payments.example
 .neon
 node_modules/
 .agents/

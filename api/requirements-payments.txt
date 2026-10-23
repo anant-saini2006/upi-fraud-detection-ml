@@ -1,0 +1,5 @@
+# Additional backend dependencies for Razorpay payment integration.
+# Install into the same virtual environment as your FastAPI server:
+#   pip install -r api/requirements-payments.txt
+razorpay>=1.4.2
+sqlalchemy>=2.0

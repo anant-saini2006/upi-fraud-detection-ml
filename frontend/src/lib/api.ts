@@ -54,6 +54,12 @@ async function request<T>(
       const text = await res.text();
       if (text) errorDetail = text;
     }
+    if (res.status === 401 && path.startsWith('/api/admin') && path !== '/api/admin/login') {
+      clearAdminToken();
+      if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin') && window.location.pathname !== '/admin/login') {
+        window.location.href = '/admin/login';
+      }
+    }
     throw new Error(errorDetail);
   }
   return res.json() as Promise<T>;
@@ -152,10 +158,27 @@ export interface ModelComparison {
   Recall: number;
   F1: number;
   'ROC-AUC': number;
+  'PR-AUC'?: number;
+  'False Positive Rate'?: number;
+  FPR?: number;
+}
+
+export interface MetricCiBounds {
+  ci_lower_95: number;
+  median: number;
+  ci_upper_95: number;
 }
 
 export interface PerformanceData {
-  metrics: { accuracy: number; precision: number; recall: number; f1: number; roc_auc: number };
+  metrics: {
+    accuracy: number;
+    precision: number;
+    recall: number;
+    f1: number;
+    roc_auc: number;
+    pr_auc?: number;
+    false_positive_rate?: number;
+  };
   confusion_matrix: ConfusionMatrix;
   roc_curve: RocPoint[];
   feature_importances: FeatureImportance[];
@@ -163,6 +186,7 @@ export interface PerformanceData {
   best_model_name: string;
   selection_rationale: string;
   evaluation_note: string;
+  bootstrap_ci?: Record<string, MetricCiBounds>;
 }
 
 export interface CsvAnalysis {

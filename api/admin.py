@@ -244,7 +244,13 @@ def admin_simulate(
     import random
     from datetime import datetime, timezone
 
-    from api.database import _connection, get_thresholds, list_accounts
+    from api.database import (
+        _MEMORY_ACCOUNTS,
+        _MEMORY_PAYMENTS,
+        _connection,
+        get_thresholds,
+        list_accounts,
+    )
     from api.gateway import _generate_pi_id, _score_transaction
     from api.index import _MODEL, _PREPROCESSOR
 
@@ -371,6 +377,30 @@ def admin_simulate(
                     )
     except Exception:
         results["errors"] += body.count
+        for row in payment_rows:
+            p_id = row[0]
+            _MEMORY_PAYMENTS[p_id] = {
+                "id": p_id,
+                "idempotency_key": row[1],
+                "amount": row[2],
+                "currency": row[3],
+                "sender_vpa": row[4],
+                "receiver_vpa": row[5],
+                "description": row[6],
+                "fraud_probability": row[7],
+                "fraud_label": row[8],
+                "risk_band": row[9],
+                "reasons": json.loads(row[10]) if isinstance(row[10], str) else row[10],
+                "status": row[11],
+                "decline_reason": row[12],
+                "created_at": row[13].isoformat() if hasattr(row[13], "isoformat") else str(row[13]),
+                "confirmed_at": row[14].isoformat() if hasattr(row[14], "isoformat") else str(row[14]),
+                "simulated_hour": row[15],
+                "scenario_tag": row[16],
+            }
+        for vpa, acc in accounts.items():
+            if vpa in _MEMORY_ACCOUNTS:
+                _MEMORY_ACCOUNTS[vpa].update(acc)
 
     return {
         "simulated": body.count,

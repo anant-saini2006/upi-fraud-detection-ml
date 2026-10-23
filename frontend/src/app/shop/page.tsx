@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import { api } from '@/lib/api';
+import RazorpayPayButton from '@/components/RazorpayPayButton';
 
 interface Product {
   id: string;
@@ -300,25 +301,62 @@ export default function ShopPage() {
                   </div>
                 </div>
 
-                <div className="pt-3 border-t border-border-light flex items-center justify-between">
+                <div className="pt-3 border-t border-border-light flex flex-wrap items-center justify-between gap-2">
                   <div className="text-lg font-bold text-text-primary font-mono">{formatCurrency(prod.price)}</div>
-                  <button
-                    onClick={() => handleBuy(prod.price, prod.name, 'alice@testpay', 'bob@testpay')}
-                    disabled={!!isSubmitting}
-                    className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg bg-primary hover:bg-primary-dark text-white text-xs font-semibold shadow-sm transition disabled:opacity-50"
-                  >
-                    {isSubmitting === prod.name ? (
-                      <span className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
-                    ) : (
-                      <>
-                        <span className="material-symbols-outlined text-base">shopping_cart_checkout</span>
-                        <span>Buy with UPI</span>
-                      </>
-                    )}
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => handleBuy(prod.price, prod.name, 'alice@testpay', 'bob@testpay')}
+                      disabled={!!isSubmitting}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border-light bg-gray-50 hover:bg-gray-100 text-text-primary text-xs font-semibold transition disabled:opacity-50"
+                      title="Run simulated UPI payment flow"
+                    >
+                      {isSubmitting === prod.name ? (
+                        <span className="w-3.5 h-3.5 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                      ) : (
+                        <>
+                          <span className="material-symbols-outlined text-sm">science</span>
+                          <span>Simulate</span>
+                        </>
+                      )}
+                    </button>
+                    <RazorpayPayButton productId={prod.id} label="Razorpay" />
+                  </div>
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* Razorpay Gateway Live Integration */}
+        <section className="bg-bg-card rounded-xl border border-primary/25 p-5 sm:p-6 shadow-card space-y-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="space-y-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary/10 text-primary text-[11px] font-semibold">
+                <span className="material-symbols-outlined text-xs">verified_user</span>
+                Payment Gateway Starter
+              </div>
+              <h4 className="text-base font-semibold text-text-primary">Razorpay Standard Checkout Integration</h4>
+              <p className="text-xs text-text-secondary max-w-2xl leading-relaxed">
+                Production-grade checkout architecture featuring server-side order creation (<code className="text-primary font-mono">/payments/orders</code>), HMAC-SHA256 signature verification (<code className="text-primary font-mono">/payments/verify</code>), and webhook replay protection (<code className="text-primary font-mono">/payments/webhook</code>).
+              </p>
+            </div>
+            <div className="shrink-0">
+              <RazorpayPayButton productId="demo_item" label="Test Checkout (₹199)" />
+            </div>
+          </div>
+          <div className="pt-3 border-t border-border-light grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs text-text-muted">
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-sm text-primary mt-0.5">lock</span>
+              <span>HMAC-SHA256 signature verification protects against client-side tampering.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-sm text-primary mt-0.5">sync_alt</span>
+              <span>Idempotent webhook ledger guards against duplicate event delivery.</span>
+            </div>
+            <div className="flex items-start gap-2">
+              <span className="material-symbols-outlined text-sm text-amber-600 mt-0.5">warning</span>
+              <span>Fraud adapter safely marks gateway webhooks as <code className="text-amber-700">needs_feature_adapter</code> without fabricating PaySim balance features.</span>
+            </div>
           </div>
         </section>
 

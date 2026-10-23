@@ -97,8 +97,9 @@ BINARY_FEATURE_COLUMNS: tuple[str, ...] = ("is_high_value",)
 
 DEFAULT_HIGH_VALUE_QUANTILE = 0.95
 KNOWN_SYNTHETIC_FIXTURE_SHA256 = (
-    "152c8b14072fa4fe95d5553d35627b054997919d14f769ca14db441dc4563b20"
+    "49f15c888e3a68951e7cc69e22fc4c0814b994fc75de72a7d8aa0164cebba83a"
 )
+
 
 
 def _as_path(path: Path | str) -> Path:

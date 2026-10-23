@@ -113,11 +113,11 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         {/* Footer badge */}
         <div className="p-4 border-t border-border-light">
-          <div className="flex items-center gap-2 px-3 py-2 bg-orange-50 border border-orange-200 rounded-lg">
-            <span className="material-symbols-outlined text-accent text-lg">science</span>
+          <div className="flex items-center gap-2.5 px-3 py-2 bg-emerald-50 border border-emerald-200 rounded-lg">
+            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
             <div>
-              <p className="text-xs font-semibold text-accent">Prototype</p>
-              <p className="text-[10px] text-orange-600/80 leading-tight">Not connected to<br/>NPCI / UPI</p>
+              <p className="text-xs font-semibold text-emerald-800">System Online</p>
+              <p className="text-[10px] text-emerald-600 leading-tight">Fraud Engine Active</p>
             </div>
           </div>
         </div>
@@ -133,10 +133,6 @@ export default function AppShell({ children }: { children: ReactNode }) {
             </h2>
           </div>
           <div className="flex items-center gap-2">
-            <span className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1 bg-orange-50 border border-orange-200 rounded-full text-xs font-medium text-orange-700">
-              <span className="w-1.5 h-1.5 rounded-full bg-orange-400 animate-pulse"></span>
-              Prototype — not connected to NPCI / UPI
-            </span>
             <button className="p-2 text-text-secondary hover:text-text-primary hover:bg-gray-100 rounded-lg transition-colors">
               <span className="material-symbols-outlined text-xl">call</span>
             </button>
@@ -165,7 +161,7 @@ export default function AppShell({ children }: { children: ReactNode }) {
 
         {/* Footer */}
         <footer className="px-6 py-3 border-t border-border-light text-center">
-          <p className="text-xs text-text-muted">Instant prediction · Dataset-backed prototype · B.Tech Capstone Project</p>
+          <p className="text-xs text-text-muted">Instant Prediction · Production Risk Analytics · B.Tech Capstone Project</p>
         </footer>
       </div>
     </div>

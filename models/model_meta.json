@@ -1,13 +1,13 @@
 {
   "artifact_format_version": 2,
-  "trained_at_utc": "2026-08-20T09:55:59+00:00",
+  "trained_at_utc": "2026-10-23T14:41:27+00:00",
   "project_scope": {
     "title": "UPI Fraud Detection Using Machine Learning",
     "description": "Transaction-level digital-payment fraud-classification prototype. It is not connected to the real UPI/NPCI network and is not real-time payment-network infrastructure."
   },
   "dataset_provenance": {
     "path": "data/transactions.csv",
-    "sha256": "152c8b14072fa4fe95d5553d35627b054997919d14f769ca14db441dc4563b20",
+    "sha256": "49f15c888e3a68951e7cc69e22fc4c0814b994fc75de72a7d8aa0164cebba83a",
     "rows": 100000,
     "columns": [
       "step",
@@ -39,7 +39,7 @@
   },
   "dataset": {
     "path": "data/transactions.csv",
-    "sha256": "152c8b14072fa4fe95d5553d35627b054997919d14f769ca14db441dc4563b20",
+    "sha256": "49f15c888e3a68951e7cc69e22fc4c0814b994fc75de72a7d8aa0164cebba83a",
     "rows": 100000,
     "columns": [
       "step",
@@ -96,7 +96,7 @@
     "type_PAYMENT",
     "type_TRANSFER"
   ],
-  "high_value_threshold": 12942.543000000003,
+  "high_value_threshold": 14873.517000000007,
   "high_value_quantile": 0.95,
   "preprocessing": {
     "raw_feature_columns": [
@@ -175,14 +175,18 @@
       "TRANSFER"
     ],
     "high_value_quantile": 0.95,
-    "high_value_threshold": 12942.543000000003,
+    "high_value_threshold": 14873.517000000007,
     "unknown_transaction_type_policy": "reject before one-hot encoding",
     "artifact": "models/preprocessor.pkl",
     "inference_instruction": "Pass a DataFrame containing raw_feature_columns to preprocessor.transform(). Do not recreate derived features or recalculate the high-value threshold in the API."
   },
   "model_artifact": "models/fraud_model.pkl",
-  "best_model_name": "Logistic Regression",
+  "best_model_name": "Histogram Gradient Boosting",
   "model_configurations": {
+    "Dummy Classifier": {
+      "family": "naive baseline",
+      "strategy": "most_frequent"
+    },
     "Logistic Regression": {
       "family": "linear baseline",
       "max_iter": 2000,
@@ -209,18 +213,44 @@
   },
   "comparison": [
     {
-      "Model": "Logistic Regression",
+      "Model": "Dummy Classifier",
       "Evaluation Split": "validation (not holdout)",
       "Operating Threshold": 0.5,
-      "Accuracy": 1.0,
-      "Precision": 1.0,
-      "Recall": 1.0,
-      "F1": 1.0,
-      "ROC-AUC": 1.0,
-      "PR-AUC": 1.0,
+      "Accuracy": 0.9987,
+      "Precision": 0.0,
+      "Recall": 0.0,
+      "F1": 0.0,
+      "ROC-AUC": 0.5,
+      "PR-AUC": 0.0013,
+      "False Positive Rate": 0.0,
+      "FPR": 0.0,
       "Confusion Matrix": {
         "tn": 19974,
         "fp": 0,
+        "fn": 26,
+        "tp": 0
+      },
+      "Evaluation Class Counts": {
+        "0": 19974,
+        "1": 26
+      },
+      "Selection Score": -1.0
+    },
+    {
+      "Model": "Logistic Regression",
+      "Evaluation Split": "validation (not holdout)",
+      "Operating Threshold": 0.5,
+      "Accuracy": 0.979,
+      "Precision": 0.058296,
+      "Recall": 1.0,
+      "F1": 0.110169,
+      "ROC-AUC": 0.994096,
+      "PR-AUC": 0.172313,
+      "False Positive Rate": 0.021027,
+      "FPR": 0.021027,
+      "Confusion Matrix": {
+        "tn": 19554,
+        "fp": 420,
         "fn": 0,
         "tp": 26
       },
@@ -228,43 +258,47 @@
         "0": 19974,
         "1": 26
       },
-      "Selection Score": 1.0
+      "Selection Score": 0.653389
     },
     {
       "Model": "Random Forest",
       "Evaluation Split": "validation (not holdout)",
       "Operating Threshold": 0.5,
-      "Accuracy": 1.0,
-      "Precision": 1.0,
-      "Recall": 1.0,
-      "F1": 1.0,
-      "ROC-AUC": 1.0,
-      "PR-AUC": 1.0,
+      "Accuracy": 0.9967,
+      "Precision": 0.272727,
+      "Recall": 0.923077,
+      "F1": 0.421053,
+      "ROC-AUC": 0.999209,
+      "PR-AUC": 0.624344,
+      "False Positive Rate": 0.003204,
+      "FPR": 0.003204,
       "Confusion Matrix": {
-        "tn": 19974,
-        "fp": 0,
-        "fn": 0,
-        "tp": 26
+        "tn": 19910,
+        "fp": 64,
+        "fn": 2,
+        "tp": 24
       },
       "Evaluation Class Counts": {
         "0": 19974,
         "1": 26
       },
-      "Selection Score": 1.0
+      "Selection Score": 0.752761
     },
     {
       "Model": "Histogram Gradient Boosting",
       "Evaluation Split": "validation (not holdout)",
       "Operating Threshold": 0.5,
-      "Accuracy": 0.99995,
-      "Precision": 1.0,
+      "Accuracy": 0.9986,
+      "Precision": 0.480769,
       "Recall": 0.961538,
-      "F1": 0.980392,
-      "ROC-AUC": 1.0,
-      "PR-AUC": 1.0,
+      "F1": 0.641026,
+      "ROC-AUC": 0.999798,
+      "PR-AUC": 0.872966,
+      "False Positive Rate": 0.001352,
+      "FPR": 0.001352,
       "Confusion Matrix": {
-        "tn": 19974,
-        "fp": 0,
+        "tn": 19947,
+        "fp": 27,
         "fn": 1,
         "tp": 25
       },
@@ -272,7 +306,7 @@
         "0": 19974,
         "1": 26
       },
-      "Selection Score": 0.972021
+      "Selection Score": 0.868124
     }
   ],
   "evaluation": {
@@ -282,6 +316,7 @@
     "outer_holdout": {
       "strategy": "stratified train/test split",
       "test_size": 0.2,
+      "time_split": false,
       "development_rows": 80000,
       "holdout_rows": 20000,
       "development_class_counts": {
@@ -309,18 +344,44 @@
       },
       "results": [
         {
-          "Model": "Logistic Regression",
+          "Model": "Dummy Classifier",
           "Evaluation Split": "validation (not holdout)",
           "Operating Threshold": 0.5,
-          "Accuracy": 1.0,
-          "Precision": 1.0,
-          "Recall": 1.0,
-          "F1": 1.0,
-          "ROC-AUC": 1.0,
-          "PR-AUC": 1.0,
+          "Accuracy": 0.9987,
+          "Precision": 0.0,
+          "Recall": 0.0,
+          "F1": 0.0,
+          "ROC-AUC": 0.5,
+          "PR-AUC": 0.0013,
+          "False Positive Rate": 0.0,
+          "FPR": 0.0,
           "Confusion Matrix": {
             "tn": 19974,
             "fp": 0,
+            "fn": 26,
+            "tp": 0
+          },
+          "Evaluation Class Counts": {
+            "0": 19974,
+            "1": 26
+          },
+          "Selection Score": -1.0
+        },
+        {
+          "Model": "Logistic Regression",
+          "Evaluation Split": "validation (not holdout)",
+          "Operating Threshold": 0.5,
+          "Accuracy": 0.979,
+          "Precision": 0.058296,
+          "Recall": 1.0,
+          "F1": 0.110169,
+          "ROC-AUC": 0.994096,
+          "PR-AUC": 0.172313,
+          "False Positive Rate": 0.021027,
+          "FPR": 0.021027,
+          "Confusion Matrix": {
+            "tn": 19554,
+            "fp": 420,
             "fn": 0,
             "tp": 26
           },
@@ -328,43 +389,47 @@
             "0": 19974,
             "1": 26
           },
-          "Selection Score": 1.0
+          "Selection Score": 0.653389
         },
         {
           "Model": "Random Forest",
           "Evaluation Split": "validation (not holdout)",
           "Operating Threshold": 0.5,
-          "Accuracy": 1.0,
-          "Precision": 1.0,
-          "Recall": 1.0,
-          "F1": 1.0,
-          "ROC-AUC": 1.0,
-          "PR-AUC": 1.0,
+          "Accuracy": 0.9967,
+          "Precision": 0.272727,
+          "Recall": 0.923077,
+          "F1": 0.421053,
+          "ROC-AUC": 0.999209,
+          "PR-AUC": 0.624344,
+          "False Positive Rate": 0.003204,
+          "FPR": 0.003204,
           "Confusion Matrix": {
-            "tn": 19974,
-            "fp": 0,
-            "fn": 0,
-            "tp": 26
+            "tn": 19910,
+            "fp": 64,
+            "fn": 2,
+            "tp": 24
           },
           "Evaluation Class Counts": {
             "0": 19974,
             "1": 26
           },
-          "Selection Score": 1.0
+          "Selection Score": 0.752761
         },
         {
           "Model": "Histogram Gradient Boosting",
           "Evaluation Split": "validation (not holdout)",
           "Operating Threshold": 0.5,
-          "Accuracy": 0.99995,
-          "Precision": 1.0,
+          "Accuracy": 0.9986,
+          "Precision": 0.480769,
           "Recall": 0.961538,
-          "F1": 0.980392,
-          "ROC-AUC": 1.0,
-          "PR-AUC": 1.0,
+          "F1": 0.641026,
+          "ROC-AUC": 0.999798,
+          "PR-AUC": 0.872966,
+          "False Positive Rate": 0.001352,
+          "FPR": 0.001352,
           "Confusion Matrix": {
-            "tn": 19974,
-            "fp": 0,
+            "tn": 19947,
+            "fp": 27,
             "fn": 1,
             "tp": 25
           },
@@ -372,7 +437,7 @@
             "0": 19974,
             "1": 26
           },
-          "Selection Score": 0.972021
+          "Selection Score": 0.868124
         }
       ],
       "selection_score": "0.60 * Recall + 0.25 * F1 + 0.15 * PR-AUC; exact ties prefer the simpler model."
@@ -416,24 +481,53 @@
       "warning": "SMOTENC was never applied to validation or holdout data. Applying oversampling before a split would leak synthetic neighbours into evaluation."
     },
     "final_holdout_metrics": {
-      "Model": "Logistic Regression",
+      "Model": "Histogram Gradient Boosting",
       "Evaluation Split": "untouched stratified holdout",
       "Operating Threshold": 0.5,
-      "Accuracy": 1.0,
-      "Precision": 1.0,
-      "Recall": 1.0,
-      "F1": 1.0,
-      "ROC-AUC": 1.0,
-      "PR-AUC": 1.0,
+      "Accuracy": 0.9987,
+      "Precision": 0.5,
+      "Recall": 0.884615,
+      "F1": 0.638889,
+      "ROC-AUC": 0.99954,
+      "PR-AUC": 0.844555,
+      "False Positive Rate": 0.001151,
+      "FPR": 0.001151,
       "Confusion Matrix": {
-        "tn": 19974,
-        "fp": 0,
-        "fn": 0,
-        "tp": 26
+        "tn": 19951,
+        "fp": 23,
+        "fn": 3,
+        "tp": 23
       },
       "Evaluation Class Counts": {
         "0": 19974,
         "1": 26
+      }
+    },
+    "final_holdout_bootstrap_ci": {
+      "Recall": {
+        "ci_lower_95": 0.7692,
+        "median": 0.8846,
+        "ci_upper_95": 1.0
+      },
+      "Precision": {
+        "ci_lower_95": 0.4067,
+        "median": 0.5,
+        "ci_upper_95": 0.6216
+      },
+      "F1": {
+        "ci_lower_95": 0.5429,
+        "median": 0.6389,
+        "ci_upper_95": 0.7463
+      },
+      "PR-AUC": {
+        "ci_lower_95": 0.7407,
+        "median": 0.8504,
+        "ci_upper_95": 0.9397
+      },
+      "ROC-AUC": {
+        "ci_lower_95": 0.9991,
+        "median": 0.9996,
+        "ci_upper_95": 0.9999
       }
     },
     "holdout_used_once_after_selection": true,
@@ -441,7 +535,7 @@
   },
   "feature_importance": {
     "artifact": "models/feature_importances.csv",
-    "method": "absolute coefficient magnitude on preprocessed features",
+    "method": "permutation importance (mean drop in average precision)",
     "evaluation_split": "untouched stratified holdout"
   },
   "selection_rationale": "The final model was selected solely from stratified validation results with recall weighted most heavily. The holdout result was calculated only after selection. A false negative can miss a fraudulent transaction, while a false positive can be routed for review."

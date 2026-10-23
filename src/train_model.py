@@ -44,6 +44,7 @@ import joblib
 import numpy as np
 import pandas as pd
 from imblearn.over_sampling import SMOTENC
+from sklearn.dummy import DummyClassifier
 from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
 from sklearn.inspection import permutation_importance
 from sklearn.linear_model import LogisticRegression
@@ -117,10 +118,9 @@ def _model_factories(random_state: int) -> dict[str, Callable[[], Any]]:
     balanced by SMOTENC; using both would double-correct the class imbalance.
     """
     return {
+        "Dummy Classifier": lambda: DummyClassifier(strategy="most_frequent"),
         "Logistic Regression": lambda: LogisticRegression(
             max_iter=2_000,
-            # liblinear remains numerically stable on this deliberately
-            # separable synthetic fixture; L-BFGS emits overflow warnings here.
             solver="liblinear",
             C=0.1,
             random_state=random_state,
@@ -147,6 +147,10 @@ def _model_factories(random_state: int) -> dict[str, Callable[[], Any]]:
 def _model_config_summary() -> dict[str, dict[str, Any]]:
     """Small human-readable configs suitable for metadata, not raw estimator dumps."""
     return {
+        "Dummy Classifier": {
+            "family": "naive baseline",
+            "strategy": "most_frequent",
+        },
         "Logistic Regression": {
             "family": "linear baseline",
             "max_iter": 2000,
@@ -224,6 +228,14 @@ def resample_training_raw_features(
         X_resampled_raw.loc[:, list(NUMERIC_RAW_FEATURE_COLUMNS)]
     )
     X_resampled_raw["type"] = X_resampled_raw["type"].astype(str)
+    for col in NUMERIC_RAW_FEATURE_COLUMNS:
+        if col == "step":
+            X_resampled_raw[col] = np.clip(X_resampled_raw[col].round(), 1, 744)
+        elif col == "amount":
+            X_resampled_raw[col] = np.maximum(X_resampled_raw[col].round(2), 0.01)
+        else:
+            X_resampled_raw[col] = np.maximum(X_resampled_raw[col].round(2), 0.0)
+
 
     # The interpolation is a convex combination of valid non-negative inputs,
     # but validate again so a package change cannot silently create bad rows.
@@ -272,6 +284,7 @@ def _metric_record(
         raise ValueError(f"{name} produced non-finite fraud probabilities on {split_name}.")
     predictions = (probabilities >= OPERATING_THRESHOLD).astype(np.int8)
     tn, fp, fn, tp = confusion_matrix(y_evaluation, predictions, labels=[0, 1]).ravel()
+    fpr = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
 
     # Keep full precision while selecting the model; JSON table values are
     # rounded only for readability once the record is constructed.
@@ -292,6 +305,8 @@ def _metric_record(
         "F1": round(f1, 6),
         "ROC-AUC": round(roc_auc, 6),
         "PR-AUC": round(pr_auc, 6),
+        "False Positive Rate": round(fpr, 6),
+        "FPR": round(fpr, 6),
         "Confusion Matrix": {
             "tn": int(tn),
             "fp": int(fp),
@@ -310,6 +325,8 @@ def _selection_score(metrics: dict[str, Any]) -> float:
     high recall solely by flagging every transaction.  PR-AUC is particularly
     informative for the heavily imbalanced fraud class.
     """
+    if metrics["Model"] == "Dummy Classifier":
+        return -1.0
     return (
         0.60 * float(metrics["Recall"])
         + 0.25 * float(metrics["F1"])
@@ -329,7 +346,8 @@ def _add_selection_scores(results: list[dict[str, Any]]) -> list[dict[str, Any]]
 
 def _choose_best_model(results: list[dict[str, Any]]) -> str:
     """Choose using validation only, preferring the simpler model for exact ties."""
-    if not results:
+    eligible = [r for r in results if r["Model"] != "Dummy Classifier"]
+    if not eligible:
         raise ValueError("Cannot select a model from an empty result list.")
     simplicity_rank = {
         "Logistic Regression": 3,
@@ -337,14 +355,14 @@ def _choose_best_model(results: list[dict[str, Any]]) -> str:
         "Histogram Gradient Boosting": 1,
     }
     return max(
-        results,
+        eligible,
         key=lambda result: (
             _selection_score(result),
             float(result["Recall"]),
             float(result["F1"]),
             float(result["PR-AUC"]),
             float(result["ROC-AUC"]),
-            simplicity_rank[result["Model"]],
+            simplicity_rank.get(result["Model"], 0),
         ),
     )["Model"]
 
@@ -352,10 +370,60 @@ def _choose_best_model(results: list[dict[str, Any]]) -> str:
 def _print_metric_table(results: list[dict[str, Any]], *, heading: str) -> None:
     """Print a concise evidence table without leading with accuracy."""
     table = pd.DataFrame(results)
-    columns = ["Model", "Recall", "Precision", "F1", "PR-AUC", "ROC-AUC", "Accuracy"]
+    columns = ["Model", "Recall", "Precision", "F1", "PR-AUC", "ROC-AUC", "FPR", "Accuracy"]
     columns = [column for column in columns if column in table.columns]
     print(f"\n{'=' * 84}\n{heading}\n{'=' * 84}")
     print(table.loc[:, columns].to_string(index=False))
+
+
+def _bootstrap_holdout_ci(
+    model: Any,
+    X_holdout_processed: np.ndarray,
+    y_holdout: pd.Series,
+    n_bootstraps: int = 1_000,
+    random_state: int = RANDOM_STATE,
+) -> dict[str, dict[str, float]]:
+    """Calculate 95% confidence intervals using stratified bootstrap resampling."""
+    rng = np.random.default_rng(random_state)
+    y_arr = np.asarray(y_holdout)
+    pos_indices = np.where(y_arr == 1)[0]
+    neg_indices = np.where(y_arr == 0)[0]
+
+    with warnings.catch_warnings():
+        warnings.filterwarnings("ignore", message=".*encountered in matmul", category=RuntimeWarning)
+        probabilities = model.predict_proba(X_holdout_processed)[:, 1]
+
+    recalls, precisions, f1s, pr_aucs, roc_aucs = [], [], [], [], []
+
+    for _ in range(n_bootstraps):
+        pos_boot = rng.choice(pos_indices, size=len(pos_indices), replace=True)
+        neg_boot = rng.choice(neg_indices, size=len(neg_indices), replace=True)
+        boot_indices = np.concatenate([pos_boot, neg_boot])
+
+        y_b = y_arr[boot_indices]
+        prob_b = probabilities[boot_indices]
+        pred_b = (prob_b >= OPERATING_THRESHOLD).astype(int)
+
+        recalls.append(recall_score(y_b, pred_b, zero_division=0))
+        precisions.append(precision_score(y_b, pred_b, zero_division=0))
+        f1s.append(f1_score(y_b, pred_b, zero_division=0))
+        pr_aucs.append(average_precision_score(y_b, prob_b))
+        roc_aucs.append(roc_auc_score(y_b, prob_b))
+
+    def ci_bounds(samples: list[float]) -> dict[str, float]:
+        return {
+            "ci_lower_95": round(float(np.percentile(samples, 2.5)), 4),
+            "median": round(float(np.percentile(samples, 50.0)), 4),
+            "ci_upper_95": round(float(np.percentile(samples, 97.5)), 4),
+        }
+
+    return {
+        "Recall": ci_bounds(recalls),
+        "Precision": ci_bounds(precisions),
+        "F1": ci_bounds(f1s),
+        "PR-AUC": ci_bounds(pr_aucs),
+        "ROC-AUC": ci_bounds(roc_aucs),
+    }
 
 
 def _stratified_sample_for_importance(
@@ -632,6 +700,18 @@ def train(
     )
     _print_metric_table([holdout_metrics], heading="FINAL SELECTED MODEL — UNTOUCHED HOLDOUT")
 
+    print("\nCalculating 95% bootstrap confidence intervals for holdout metrics (1,000 resamples)…")
+    holdout_bootstrap_ci = _bootstrap_holdout_ci(
+        final_model,
+        X_holdout_processed,
+        y_holdout,
+        n_bootstraps=1_000,
+        random_state=random_state,
+    )
+    print("Holdout 95% Bootstrap Confidence Intervals:")
+    for metric_name, bounds in holdout_bootstrap_ci.items():
+        print(f"  {metric_name}: median={bounds['median']:.4f} (95% CI: [{bounds['ci_lower_95']:.4f}, {bounds['ci_upper_95']:.4f}])")
+
     feature_names = get_feature_names(final_preprocessor)
     feature_importance, importance_method = _feature_importance_table(
         final_model,
@@ -724,6 +804,7 @@ def train(
                 ),
             },
             "final_holdout_metrics": holdout_metrics,
+            "final_holdout_bootstrap_ci": holdout_bootstrap_ci,
             "holdout_used_once_after_selection": True,
             "evaluation_limitations": provenance["evaluation_caveat"],
         },

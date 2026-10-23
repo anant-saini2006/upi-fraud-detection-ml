@@ -16,7 +16,7 @@ import os
 import warnings
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, Optional
 
 import joblib
 import numpy as np
@@ -29,6 +29,7 @@ from pydantic import BaseModel, Field, field_validator
 from sklearn.metrics import (
     accuracy_score,
     auc,
+    average_precision_score,
     confusion_matrix,
     f1_score,
     precision_score,
@@ -43,6 +44,16 @@ from api.database import (
     record_prediction,
     status as database_status,
 )
+
+# Razorpay payment integration (optional — graceful if deps missing)
+try:
+    from api.payment_integration.razorpay_integration import (
+        router as payment_router,
+        init_payment_tables,
+    )
+    _PAYMENTS_AVAILABLE = True
+except ImportError:
+    _PAYMENTS_AVAILABLE = False
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -229,6 +240,8 @@ async def lifespan(_: FastAPI):
     # Persistence is optional in local development. A transient Neon failure
     # must not stop a student from demonstrating model inference.
     initialise_database()
+    if _PAYMENTS_AVAILABLE:
+        init_payment_tables()
     yield
 
 
@@ -269,6 +282,10 @@ app.add_middleware(
 )
 app.add_middleware(StripVercelPrefixMiddleware)
 
+# Include Razorpay payment routes if the integration is installed.
+if _PAYMENTS_AVAILABLE:
+    app.include_router(payment_router)
+
 
 @app.exception_handler(404)
 async def custom_404_handler(request: Request, exc: Any) -> JSONResponse:
@@ -291,6 +308,7 @@ class TransactionInput(BaseModel):
     amount: float = Field(..., gt=0, description="Transaction amount in INR")
     transaction_type: str = Field(..., description="PaySim transaction category")
     hour_of_day: int = Field(..., ge=0, le=23, description="Hour from 0 to 23")
+    step: Optional[int] = Field(default=None, ge=1, le=744, description="Optional simulation step 1-744")
     old_balance_orig: float = Field(default=0.0, ge=0)
     new_balance_orig: float = Field(default=0.0, ge=0)
     old_balance_dest: float = Field(default=0.0, ge=0)
@@ -375,10 +393,15 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
     """Produce one instant prediction from saved, never-retrained artifacts."""
     model, preprocessor = _require_inference_artifacts()
 
+    step_value = (
+        transaction.step
+        if transaction.step is not None
+        else (15 * 24 + transaction.hour_of_day)
+    )
     raw_input = pd.DataFrame(
         [
             {
-                "step": transaction.hour_of_day,
+                "step": step_value,
                 "type": transaction.transaction_type,
                 "amount": transaction.amount,
                 "oldbalanceOrg": transaction.old_balance_orig,
@@ -561,6 +584,9 @@ def model_performance() -> dict[str, Any]:
     if roc_data[-1] != {"fpr": 1.0, "tpr": 1.0}:
         roc_data.append({"fpr": 1.0, "tpr": 1.0})
 
+    fpr_val = float(fp / (fp + tn)) if (fp + tn) > 0 else 0.0
+    pr_auc_val = float(average_precision_score(test_target, probabilities))
+
     return {
         "metrics": {
             "accuracy": round(float(accuracy_score(test_target, predicted)), 4),
@@ -568,6 +594,8 @@ def model_performance() -> dict[str, Any]:
             "recall": round(float(recall_score(test_target, predicted, zero_division=0)), 4),
             "f1": round(float(f1_score(test_target, predicted, zero_division=0)), 4),
             "roc_auc": round(roc_auc, 4),
+            "pr_auc": round(pr_auc_val, 4),
+            "false_positive_rate": round(fpr_val, 4),
         },
         "confusion_matrix": {"tn": int(tn), "fp": int(fp), "fn": int(fn), "tp": int(tp)},
         "roc_curve": roc_data,
@@ -576,6 +604,7 @@ def model_performance() -> dict[str, Any]:
         "best_model_name": _META.get("best_model_name", "Unknown"),
         "selection_rationale": _META.get("selection_rationale", "Not recorded."),
         "evaluation_note": _dataset_info().get("validation_note", ""),
+        "bootstrap_ci": _META.get("evaluation", {}).get("final_holdout_bootstrap_ci"),
     }
 
 

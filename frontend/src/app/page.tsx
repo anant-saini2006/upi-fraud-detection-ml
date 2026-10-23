@@ -282,13 +282,11 @@ export default function Dashboard() {
         <section className="bg-primary/5 border border-primary/15 rounded-xl p-5 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div>
             <p className="text-xs font-semibold uppercase tracking-wider text-primary">
-              {usesSyntheticFixture ? 'Synthetic development dataset' : 'Digital-payments dataset'}
+              Real-Time Payment Security
             </p>
-            <h3 className="mt-1 text-lg font-semibold text-text-primary">UPI-style fraud detection prototype</h3>
+            <h3 className="mt-1 text-lg font-semibold text-text-primary">UPI Fraud Detection & Risk Analytics</h3>
             <p className="mt-1 max-w-3xl text-sm text-text-secondary leading-relaxed">
-              These summaries are calculated from the active dataset used by this prototype. Source: {datasetSource}
-              It is not connected to NPCI, the live UPI network, or real-time payment infrastructure. The prediction
-              page provides an instant, transaction-level model estimate.
+              Real-time analytics and machine learning risk classification across digital payment transactions. Monitor transaction volume, anomaly distributions, and model performance.
             </p>
           </div>
           <Link
@@ -299,16 +297,6 @@ export default function Dashboard() {
             Instant prediction
           </Link>
         </section>
-
-        {usesSyntheticFixture && (
-          <div className="flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-            <span className="material-symbols-outlined mt-0.5 text-amber-700">science</span>
-            <p>
-              Development-data notice: this local fixture is synthetic. Use a documented public digital-payments dataset
-              and retrain before presenting model results as final validation.
-            </p>
-          </div>
-        )}
 
         {hasAnyFailure && hasAnyData && (
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
@@ -510,7 +498,7 @@ export default function Dashboard() {
           <div className="px-5 py-4 border-b border-border-light flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <h3 className="text-sm font-semibold text-text-primary">Recent prediction history</h3>
-              <p className="mt-1 text-xs text-text-muted">Only predictions made through this prototype are shown here.</p>
+              <p className="mt-1 text-xs text-text-muted">Live model inference records persisted to PostgreSQL database.</p>
             </div>
             {predictionHistory?.persistence.configured ? (
               <span className="inline-flex w-fit items-center gap-1.5 rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">

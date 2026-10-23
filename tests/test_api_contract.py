@@ -70,7 +70,10 @@ class ApiContractTests(unittest.TestCase):
         self.assertGreater(len(index.chart_fraud_by_hour()), 0)
 
         evaluation = index.model_performance()
-        self.assertEqual(set(evaluation["metrics"]), {"accuracy", "precision", "recall", "f1", "roc_auc"})
+        self.assertEqual(
+            set(evaluation["metrics"]),
+            {"accuracy", "precision", "recall", "f1", "roc_auc", "pr_auc", "false_positive_rate"},
+        )
         self.assertEqual(set(evaluation["confusion_matrix"]), {"tn", "fp", "fn", "tp"})
 
     def test_csv_analysis_keeps_uploaded_data_separate_from_model_training(self):
