@@ -237,11 +237,18 @@ def _feature_importance_data(model: Any) -> list[dict[str, Any]]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Persistence is optional in local development. A transient Neon failure
-    # must not stop a student from demonstrating model inference.
-    initialise_database()
+    # Persistence is optional in local development and serverless environments.
+    # A transient Neon failure or missing credentials must never crash API cold-starts.
+    try:
+        initialise_database()
+    except Exception as exc:
+        warnings.warn(f"Database initialization deferred: {exc}")
+
     if _PAYMENTS_AVAILABLE:
-        init_payment_tables()
+        try:
+            init_payment_tables()
+        except Exception as exc:
+            warnings.warn(f"Payment tables initialization deferred: {exc}")
     yield
 
 

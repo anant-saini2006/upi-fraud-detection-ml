@@ -137,13 +137,31 @@ if _DATABASE_URL and _DATABASE_URL.startswith("postgres://"):
 elif _DATABASE_URL and _DATABASE_URL.startswith("postgresql://"):
     _DATABASE_URL = _DATABASE_URL.replace("postgresql://", "postgresql+psycopg2://", 1)
 
-if not _DATABASE_URL:
-    _sqlite_path = _ROOT / "payments_local.db"
-    _DATABASE_URL = f"sqlite:///{_sqlite_path}"
-    logger.info("No DATABASE_URL found; using local SQLite at %s", _sqlite_path)
+def _get_sqlite_url() -> str:
+    """Return a writable SQLite connection string for dev and serverless fallback."""
+    if os.getenv("VERCEL") or os.getenv("AWS_LAMBDA_FUNCTION_NAME"):
+        return "sqlite:////tmp/payments_local.db"
+    try:
+        test_file = _ROOT / ".perm_check"
+        test_file.touch()
+        test_file.unlink()
+        return f"sqlite:///{_ROOT / 'payments_local.db'}"
+    except (OSError, PermissionError):
+        return "sqlite:////tmp/payments_local.db"
 
-_engine = create_engine(_DATABASE_URL, pool_pre_ping=True)
-_SessionLocal = sessionmaker(bind=_engine)
+if not _DATABASE_URL:
+    _DATABASE_URL = _get_sqlite_url()
+    logger.info("No DATABASE_URL found; using local SQLite at %s", _DATABASE_URL)
+
+try:
+    _engine = create_engine(_DATABASE_URL, pool_pre_ping=True)
+    _SessionLocal = sessionmaker(bind=_engine)
+except Exception as _engine_exc:
+    logger.warning("Could not create engine for %s (%s); using in-memory SQLite", _DATABASE_URL, _engine_exc)
+    from sqlalchemy.pool import StaticPool
+    _engine = create_engine("sqlite:///:memory:", connect_args={"check_same_thread": False}, poolclass=StaticPool)
+    _SessionLocal = sessionmaker(bind=_engine)
+
 _Base = declarative_base()
 
 
@@ -187,15 +205,36 @@ def init_payment_tables() -> None:
     try:
         _Base.metadata.create_all(_engine)
         logger.info("Payment gateway tables ensured.")
+        return
     except Exception as exc:
         logger.warning(
             "Could not initialize payment tables on main DB (%s); falling back to local SQLite.",
             exc,
         )
-        _engine = create_engine(f"sqlite:///{_ROOT / 'payments_local.db'}")
+
+    try:
+        _engine = create_engine(_get_sqlite_url(), pool_pre_ping=True)
         _SessionLocal = sessionmaker(bind=_engine)
         _Base.metadata.create_all(_engine)
         logger.info("Local SQLite payment gateway tables initialized.")
+        return
+    except Exception as exc2:
+        logger.warning(
+            "Local SQLite table creation failed (%s); falling back to in-memory SQLite.", exc2
+        )
+
+    try:
+        from sqlalchemy.pool import StaticPool
+        _engine = create_engine(
+            "sqlite:///:memory:",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        _SessionLocal = sessionmaker(bind=_engine)
+        _Base.metadata.create_all(_engine)
+        logger.info("In-memory SQLite payment gateway tables initialized.")
+    except Exception as exc3:
+        logger.error("Failed to initialize in-memory payment gateway tables: %s", exc3)
 
 
 def _db() -> Session:
@@ -207,10 +246,21 @@ def _db() -> Session:
     except Exception as exc:
         if not str(_engine.url).startswith("sqlite"):
             logger.warning("Main database unreachable (%s); using local SQLite fallback.", exc)
-            _engine = create_engine(f"sqlite:///{_ROOT / 'payments_local.db'}")
-            _SessionLocal = sessionmaker(bind=_engine)
-            _Base.metadata.create_all(_engine)
-            return _SessionLocal()
+            try:
+                _engine = create_engine(_get_sqlite_url(), pool_pre_ping=True)
+                _SessionLocal = sessionmaker(bind=_engine)
+                _Base.metadata.create_all(_engine)
+                return _SessionLocal()
+            except Exception:
+                from sqlalchemy.pool import StaticPool
+                _engine = create_engine(
+                    "sqlite:///:memory:",
+                    connect_args={"check_same_thread": False},
+                    poolclass=StaticPool,
+                )
+                _SessionLocal = sessionmaker(bind=_engine)
+                _Base.metadata.create_all(_engine)
+                return _SessionLocal()
         raise
 
 
