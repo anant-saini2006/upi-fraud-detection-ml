@@ -397,6 +397,12 @@ def root() -> dict[str, str]:
     return {"message": "UPI-style fraud-detection ML prototype API"}
 
 
+@app.get("/ping")
+@app.get("/api/ping")
+def ping() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.get("/api/health")
 @app.get("/health")
 def health() -> dict[str, Any]:
