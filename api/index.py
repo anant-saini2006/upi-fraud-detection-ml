@@ -94,13 +94,23 @@ def _load_artifacts() -> None:
     """Load model artifacts once per API process/cold start."""
     global _MODEL, _PREPROCESSOR, _DATASET, _META, _FEATURE_IMPORTANCES, _LOAD_ERRORS
 
+    if _MODEL is not None and _PREPROCESSOR is not None and _DATASET is not None:
+        return
+
     _LOAD_ERRORS = []
+
+    dataset_file = DATA_PATH
+    if not dataset_file.is_file():
+        sample_file = ROOT / "data" / "sample_transactions.csv"
+        if sample_file.is_file():
+            dataset_file = sample_file
+
     artifact_paths = {
         "model": MODELS_DIR / "fraud_model.pkl",
         "preprocessor": MODELS_DIR / "preprocessor.pkl",
         "metadata": MODELS_DIR / "model_meta.json",
         "feature importances": MODELS_DIR / "feature_importances.csv",
-        "dataset": DATA_PATH,
+        "dataset": dataset_file,
     }
 
     try:
@@ -143,11 +153,15 @@ def _raw_feature_columns() -> list[str]:
 
 def _require_dataset() -> pd.DataFrame:
     if _DATASET is None:
+        _load_artifacts()
+    if _DATASET is None:
         raise HTTPException(503, "Dataset is not loaded. Check the API health endpoint.")
     return _DATASET
 
 
 def _require_inference_artifacts() -> tuple[Any, Any]:
+    if _MODEL is None or _PREPROCESSOR is None:
+        _load_artifacts()
     if _MODEL is None or _PREPROCESSOR is None:
         raise HTTPException(
             503,
@@ -258,6 +272,11 @@ async def lifespan(_: FastAPI):
             init_payment_tables()
         except Exception as exc:
             warnings.warn(f"Payment tables initialization deferred: {exc}")
+
+    try:
+        _load_artifacts()
+    except Exception as exc:
+        warnings.warn(f"Artifact loading deferred: {exc}")
     yield
 
 
@@ -380,17 +399,21 @@ class PredictionResponse(BaseModel):
     saved_to_history: bool
 
 
-_load_artifacts()
-
-
 @app.get("/")
 def root() -> dict[str, str]:
     return {"message": "UPI-style fraud-detection ML prototype API"}
 
 
 @app.get("/api/health")
+@app.get("/health")
 def health() -> dict[str, Any]:
     """Health and artifact-readiness information for deployment checks."""
+    if _MODEL is None or _PREPROCESSOR is None or _DATASET is None:
+        try:
+            _load_artifacts()
+        except Exception:
+            pass
+
     return {
         "status": "ok" if _MODEL is not None and _PREPROCESSOR is not None else "degraded",
         "model_loaded": _MODEL is not None,
@@ -402,6 +425,7 @@ def health() -> dict[str, Any]:
 
 
 @app.get("/api/dataset-info")
+@app.get("/dataset-info")
 def dataset_info() -> dict[str, Any]:
     """Expose honest dataset provenance and schema for the About/EDA views."""
     dataset = _require_dataset()
@@ -414,6 +438,7 @@ def dataset_info() -> dict[str, Any]:
 
 
 @app.get("/api/stats")
+@app.get("/stats")
 def stats() -> dict[str, Any]:
     """Dataset-level KPIs for the dashboard; never fabricated values."""
     dataset = _require_dataset()
@@ -746,3 +771,6 @@ from api.admin import router as admin_router      # noqa: E402
 
 app.include_router(gateway_router)
 app.include_router(admin_router)
+
+# Export handler for Vercel Python serverless function compatibility
+handler = app
