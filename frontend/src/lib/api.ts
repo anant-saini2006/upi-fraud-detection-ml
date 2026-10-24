@@ -388,10 +388,151 @@ export const api = {
   },
 };
 
+export async function parseAndAnalyseCsvClient(file: File): Promise<CsvAnalysis> {
+  if (file.size > 20 * 1024 * 1024) {
+    throw new Error('CSV is too large. The limit is 20 MB.');
+  }
+  if (file.size === 0) {
+    throw new Error('The uploaded file is empty.');
+  }
+
+  const text = await file.text();
+  const lines = text.split(/\r?\n/).filter((l) => l.trim().length > 0);
+  if (lines.length < 2) {
+    throw new Error('CSV file must have a header row and at least one data row.');
+  }
+
+  const parseLine = (line: string): string[] => {
+    const values: string[] = [];
+    let current = '';
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i];
+      if (char === '"') {
+        if (inQuotes && line[i + 1] === '"') {
+          current += '"';
+          i++;
+        } else {
+          inQuotes = !inQuotes;
+        }
+      } else if (char === ',' && !inQuotes) {
+        values.push(current.trim());
+        current = '';
+      } else {
+        current += char;
+      }
+    }
+    values.push(current.trim());
+    return values;
+  };
+
+  const headers = parseLine(lines[0]);
+  const colIndex: Record<string, number> = {};
+  headers.forEach((h, idx) => {
+    colIndex[h] = idx;
+  });
+
+  let missing = 0;
+  let fraudCount = 0;
+  const byType: Record<string, { total: number; fraud: number }> = {};
+  const legitAmounts: number[] = [];
+  const fraudAmounts: number[] = [];
+
+  const hasIsFraud = 'isFraud' in colIndex;
+  const hasType = 'type' in colIndex;
+  const hasAmount = 'amount' in colIndex;
+  const isFraudIdx = colIndex['isFraud'];
+  const typeIdx = colIndex['type'];
+  const amountIdx = colIndex['amount'];
+
+  const rowCount = lines.length - 1;
+
+  for (let i = 1; i < lines.length; i++) {
+    const parts = parseLine(lines[i]);
+    for (let c = 0; c < headers.length; c++) {
+      const val = parts[c] ?? '';
+      if (val === '' || val === 'NaN' || val === 'null' || val === 'None') {
+        missing++;
+      }
+    }
+
+    let isFraudVal = 0;
+    if (hasIsFraud) {
+      const parsedFraud = Number(parts[isFraudIdx]);
+      if (!Number.isNaN(parsedFraud)) {
+        isFraudVal = parsedFraud === 1 ? 1 : 0;
+        if (isFraudVal === 1) fraudCount++;
+      }
+    }
+
+    if (hasType) {
+      const t = parts[typeIdx]?.trim() || 'UNKNOWN';
+      if (!byType[t]) byType[t] = { total: 0, fraud: 0 };
+      byType[t].total++;
+      if (isFraudVal === 1) byType[t].fraud++;
+    }
+
+    if (hasAmount) {
+      const amt = Number(parts[amountIdx]);
+      if (!Number.isNaN(amt)) {
+        if (isFraudVal === 1) fraudAmounts.push(amt);
+        else legitAmounts.push(amt);
+      }
+    }
+  }
+
+  function median(arr: number[]): number {
+    if (arr.length === 0) return 0;
+    arr.sort((a, b) => a - b);
+    const mid = Math.floor(arr.length / 2);
+    return arr.length % 2 !== 0 ? arr[mid] : (arr[mid - 1] + arr[mid]) / 2;
+  }
+
+  function mean(arr: number[]): number {
+    if (arr.length === 0) return 0;
+    return arr.reduce((acc, v) => acc + v, 0) / arr.length;
+  }
+
+  const byTypeArr = Object.keys(byType).map((t) => ({
+    type: t,
+    total: byType[t].total,
+    fraud: byType[t].fraud,
+    fraud_rate: Number(((byType[t].fraud / byType[t].total) * 100).toFixed(4)),
+  }));
+
+  return {
+    rows: rowCount,
+    columns: headers,
+    missing,
+    fraud_rate: hasIsFraud ? Number(((fraudCount / rowCount) * 100).toFixed(4)) : undefined,
+    fraud_count: hasIsFraud ? fraudCount : undefined,
+    by_type: hasType && byTypeArr.length > 0 ? byTypeArr : undefined,
+    amount_stats: hasAmount
+      ? {
+          legit: { mean: Number(mean(legitAmounts).toFixed(2)), median: Number(median(legitAmounts).toFixed(2)) },
+          fraud: { mean: Number(mean(fraudAmounts).toFixed(2)), median: Number(median(fraudAmounts).toFixed(2)) },
+        }
+      : undefined,
+  };
+}
+
 export async function analyseCSV(file: File): Promise<CsvAnalysis> {
-  const form = new FormData();
-  form.append('file', file);
-  const res = await fetch(`${API_BASE}/api/analyse-csv`, { method: 'POST', body: form });
-  if (!res.ok) throw new Error(`CSV analysis failed: ${res.status}`);
-  return res.json();
+  // Vercel serverless has a hard request body limit of 4.5 MB.
+  // Files over 3.5 MB are parsed directly in the browser to prevent FUNCTION_PAYLOAD_TOO_LARGE.
+  if (file.size > 3.5 * 1024 * 1024) {
+    return parseAndAnalyseCsvClient(file);
+  }
+
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    const res = await fetch(`${API_BASE}/api/analyse-csv`, { method: 'POST', body: form });
+    if (!res.ok) {
+      return parseAndAnalyseCsvClient(file);
+    }
+    return res.json();
+  } catch {
+    // If Vercel edge drops connection or fails CORS on payload limits, fallback seamlessly to client parsing
+    return parseAndAnalyseCsvClient(file);
+  }
 }
