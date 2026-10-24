@@ -21,6 +21,10 @@ Authentication:
 
 from __future__ import annotations
 
+import base64
+import hashlib
+import hmac
+import json
 import os
 import secrets
 import sys
@@ -60,42 +64,97 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "demo1234")
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "upi-fraud-detection-admin-secret-2026")
 
-# Simple in-memory session store. Tokens expire after 24 hours.
-# Good enough for a demo — not production auth.
+# In-memory session store (kept for local cache and legacy token compatibility).
 _sessions: dict[str, dict[str, Any]] = {}
 _SESSION_TTL = 86400  # 24 hours
 
 
+def _b64url_encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _b64url_decode(s: str) -> bytes:
+    padding = (4 - (len(s) % 4)) % 4
+    return base64.urlsafe_b64decode(s + "=" * padding)
+
+
 def _create_session(username: str) -> str:
-    """Create a new session token."""
-    token = secrets.token_urlsafe(32)
+    """Create a cryptographically signed stateless session token."""
+    now = int(time.time())
+    payload = {
+        "sub": username,
+        "iat": now,
+        "exp": now + _SESSION_TTL,
+        "nonce": secrets.token_hex(8),
+    }
+    payload_json = json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
+    payload_b64 = _b64url_encode(payload_json)
+    sig = hmac.new(
+        ADMIN_SESSION_SECRET.encode("utf-8"),
+        payload_b64.encode("ascii"),
+        hashlib.sha256,
+    ).digest()
+    sig_b64 = _b64url_encode(sig)
+    token = f"{payload_b64}.{sig_b64}"
+
     _sessions[token] = {
         "username": username,
-        "created_at": time.time(),
+        "created_at": now,
     }
     return token
 
 
 def _validate_session(authorization: Optional[str]) -> str:
-    """Validate the session token and return the username."""
+    """Validate the session token and return the username.
+    
+    Supports both stateless signed tokens (which work seamlessly across
+    all Vercel serverless containers) and legacy in-memory session tokens.
+    """
     if not authorization:
         raise HTTPException(401, "Missing Authorization header")
     parts = authorization.split(" ", 1)
     if len(parts) != 2 or parts[0].lower() != "bearer":
         raise HTTPException(401, "Authorization must be: Bearer <token>")
 
-    token = parts[1]
+    token = parts[1].strip()
+    if not token:
+        raise HTTPException(401, "Invalid session token")
+
+    # 1. Stateless signed token verification
+    if "." in token:
+        token_parts = token.split(".", 1)
+        if len(token_parts) == 2:
+            payload_b64, sig_b64 = token_parts
+            expected_sig = hmac.new(
+                ADMIN_SESSION_SECRET.encode("utf-8"),
+                payload_b64.encode("ascii"),
+                hashlib.sha256,
+            ).digest()
+            expected_sig_b64 = _b64url_encode(expected_sig)
+            if hmac.compare_digest(sig_b64, expected_sig_b64):
+                try:
+                    raw_payload = _b64url_decode(payload_b64).decode("utf-8")
+                    payload = json.loads(raw_payload)
+                    exp = int(payload.get("exp", 0))
+                    if time.time() > exp:
+                        raise HTTPException(401, "Session expired — please log in again")
+                    return str(payload.get("sub", ADMIN_USERNAME))
+                except HTTPException:
+                    raise
+                except Exception:
+                    raise HTTPException(401, "Malformed session token")
+
+    # 2. Ephemeral in-memory fallback (for legacy tokens or tests)
     session = _sessions.get(token)
-    if session is None:
-        raise HTTPException(401, "Invalid or expired session token")
+    if session is not None:
+        if time.time() - session["created_at"] > _SESSION_TTL:
+            del _sessions[token]
+            raise HTTPException(401, "Session expired — please log in again")
+        return str(session["username"])
 
-    # Check expiry.
-    if time.time() - session["created_at"] > _SESSION_TTL:
-        del _sessions[token]
-        raise HTTPException(401, "Session expired — please log in again")
-
-    return str(session["username"])
+    raise HTTPException(401, "Invalid or expired session token")
 
 
 # ── Auth ─────────────────────────────────────────────────────────────────────

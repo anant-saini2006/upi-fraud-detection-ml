@@ -91,6 +91,38 @@ class ApiContractTests(unittest.TestCase):
         self.assertEqual(result["fraud_count"], 1)
         self.assertEqual(result["fraud_rate"], 50.0)
 
+    def test_admin_auth_stateless_tokens(self):
+        from api import admin
+        from api.schema import LoginRequest
+        from fastapi import HTTPException
+
+        # 1. Valid login produces a signed token containing dot separator
+        resp = admin.login(LoginRequest(username="admin", password="demo1234"))
+        token = resp.token
+        self.assertIn(".", token)
+        self.assertEqual(resp.username, "admin")
+
+        # 2. Token can be validated across simulated fresh containers (empty _sessions)
+        admin._sessions.clear()
+        validated_user = admin._validate_session(f"Bearer {token}")
+        self.assertEqual(validated_user, "admin")
+
+        # 3. Invalid credentials reject with 401
+        with self.assertRaises(HTTPException) as cm:
+            admin.login(LoginRequest(username="admin", password="wrongpassword"))
+        self.assertEqual(cm.exception.status_code, 401)
+
+        # 4. Tampered token signature fails with 401
+        tampered_token = token[:-4] + "xxxx"
+        with self.assertRaises(HTTPException) as cm:
+            admin._validate_session(f"Bearer {tampered_token}")
+        self.assertEqual(cm.exception.status_code, 401)
+
+        # 5. Missing or invalid header fails with 401
+        with self.assertRaises(HTTPException) as cm:
+            admin._validate_session(None)
+        self.assertEqual(cm.exception.status_code, 401)
+
 
 if __name__ == "__main__":
     unittest.main()

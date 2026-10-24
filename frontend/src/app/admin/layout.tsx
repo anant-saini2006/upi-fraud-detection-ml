@@ -16,19 +16,29 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const [actionMessage, setActionMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   const isLoginPage = pathname === '/admin/login';
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isCheckingAuth, setIsCheckingAuth] = useState<boolean>(true);
 
   // Auth gate check
   useEffect(() => {
-    if (isLoginPage) return;
+    if (isLoginPage) {
+      setIsCheckingAuth(false);
+      return;
+    }
     const token = getAdminToken();
     if (!token) {
-      router.replace('/admin/login');
+      setIsAuthenticated(false);
+      setIsCheckingAuth(false);
+      window.location.href = '/admin/login';
+    } else {
+      setIsAuthenticated(true);
+      setIsCheckingAuth(false);
     }
-  }, [pathname, isLoginPage, router]);
+  }, [pathname, isLoginPage]);
 
   // Review count poller
   useEffect(() => {
-    if (isLoginPage) return;
+    if (isLoginPage || !isAuthenticated) return;
     const fetchCount = () => {
       api
         .adminReviewCount()
@@ -39,7 +49,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     fetchCount();
     const interval = setInterval(fetchCount, 5000);
     return () => clearInterval(interval);
-  }, [isLoginPage]);
+  }, [isLoginPage, isAuthenticated]);
 
   const handleSimulate = async () => {
     setSimulating(true);
@@ -86,11 +96,22 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const handleLogout = () => {
     clearAdminToken();
-    router.push('/admin/login');
+    window.location.href = '/admin/login';
   };
 
   if (isLoginPage) {
     return <>{children}</>;
+  }
+
+  if (isCheckingAuth || !isAuthenticated) {
+    return (
+      <AppShell>
+        <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
+          <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+          <p className="text-xs text-text-muted">Verifying administrator session...</p>
+        </div>
+      </AppShell>
+    );
   }
 
   const navLinks = [

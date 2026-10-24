@@ -19,7 +19,7 @@ export default function AdminLoginPage() {
     try {
       const res = await api.adminLogin({ username, password });
       setAdminToken(res.token);
-      router.push('/admin');
+      window.location.href = '/admin';
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : 'Invalid credentials');
       setLoading(false);
