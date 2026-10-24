@@ -46,18 +46,34 @@ from sklearn.metrics import (
 )
 from sklearn.model_selection import train_test_split
 
+_DATABASE_LOAD_ERROR: str | None = None
 try:
-    from api.database import (
-        get_recent_predictions,
-        initialise_database,
-        record_prediction,
-        status as database_status,
-    )
-except Exception as _db_exc:
-    warnings.warn(f"Database module unavailable: {_db_exc}")
+    try:
+        from api.database import (
+            get_recent_predictions,
+            initialise_database,
+            record_prediction,
+            status as database_status,
+        )
+    except (ImportError, ModuleNotFoundError):
+        from database import (
+            get_recent_predictions,
+            initialise_database,
+            record_prediction,
+            status as database_status,
+        )
+except Exception as _exc:
+    import traceback
+
+    _DATABASE_LOAD_ERROR = f"{type(_exc).__name__}: {_exc}\n{traceback.format_exc()}"
+    warnings.warn(f"Database module unavailable: {_DATABASE_LOAD_ERROR}")
 
     def database_status() -> dict[str, Any]:
-        return {"configured": False, "available": False, "last_error": str(_db_exc)}
+        return {
+            "configured": False,
+            "available": False,
+            "last_error": _DATABASE_LOAD_ERROR,
+        }
 
     def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
         return []
@@ -70,10 +86,16 @@ except Exception as _db_exc:
 
 # Razorpay payment integration (optional — graceful if deps missing)
 try:
-    from api.payment_integration.razorpay_integration import (
-        router as payment_router,
-        init_payment_tables,
-    )
+    try:
+        from api.payment_integration.razorpay_integration import (
+            router as payment_router,
+            init_payment_tables,
+        )
+    except (ImportError, ModuleNotFoundError):
+        from payment_integration.razorpay_integration import (
+            router as payment_router,
+            init_payment_tables,
+        )
     _PAYMENTS_AVAILABLE = True
 except Exception as _p_exc:
     warnings.warn(f"Payment integration disabled: {_p_exc}")
@@ -807,14 +829,21 @@ def warmup() -> dict[str, Any]:
 
 # Mount gateway and admin routers safely
 try:
-    from api.gateway import router as gateway_router  # noqa: E402
+    try:
+        from api.gateway import router as gateway_router  # noqa: E402
+    except (ImportError, ModuleNotFoundError):
+        from gateway import router as gateway_router      # noqa: E402
     app.include_router(gateway_router)
 except Exception as _gw_exc:
     warnings.warn(f"Gateway router disabled: {_gw_exc}")
 
 try:
-    from api.admin import router as admin_router      # noqa: E402
+    try:
+        from api.admin import router as admin_router      # noqa: E402
+    except (ImportError, ModuleNotFoundError):
+        from admin import router as admin_router          # noqa: E402
     app.include_router(admin_router)
 except Exception as _adm_exc:
     warnings.warn(f"Admin router disabled: {_adm_exc}")
+
 
