@@ -64,7 +64,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "demo1234")
-ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", "upi-fraud-detection-admin-secret-2026")
+ADMIN_SESSION_SECRET = os.getenv("ADMIN_SESSION_SECRET", os.getenv("AUTH_SECRET", "upi-fraud-detection-admin-secret-2026"))
 
 # In-memory session store (kept for local cache and legacy token compatibility).
 _sessions: dict[str, dict[str, Any]] = {}
@@ -80,11 +80,13 @@ def _b64url_decode(s: str) -> bytes:
     return base64.urlsafe_b64decode(s + "=" * padding)
 
 
-def _create_session(username: str) -> str:
+def _create_session(username: str, role: str = "admin") -> str:
     """Create a cryptographically signed stateless session token."""
     now = int(time.time())
     payload = {
         "sub": username,
+        "email": username,
+        "role": role,
         "iat": now,
         "exp": now + _SESSION_TTL,
         "nonce": secrets.token_hex(8),
@@ -101,16 +103,17 @@ def _create_session(username: str) -> str:
 
     _sessions[token] = {
         "username": username,
+        "role": role,
         "created_at": now,
     }
     return token
 
 
 def _validate_session(authorization: Optional[str]) -> str:
-    """Validate the session token and return the username.
+    """Validate the admin session token and return the username.
     
-    Supports both stateless signed tokens (which work seamlessly across
-    all Vercel serverless containers) and legacy in-memory session tokens.
+    Rejects missing/invalid tokens with 401 Unauthorized.
+    Rejects valid non-admin tokens with 403 Forbidden.
     """
     if not authorization:
         raise HTTPException(401, "Missing Authorization header")
@@ -127,19 +130,38 @@ def _validate_session(authorization: Optional[str]) -> str:
         token_parts = token.split(".", 1)
         if len(token_parts) == 2:
             payload_b64, sig_b64 = token_parts
+            # Check primary secret
             expected_sig = hmac.new(
                 ADMIN_SESSION_SECRET.encode("utf-8"),
                 payload_b64.encode("ascii"),
                 hashlib.sha256,
             ).digest()
-            expected_sig_b64 = _b64url_encode(expected_sig)
-            if hmac.compare_digest(sig_b64, expected_sig_b64):
+            sig_match = hmac.compare_digest(sig_b64, _b64url_encode(expected_sig))
+
+            # If not matched, try AUTH_SECRET fallback
+            if not sig_match:
+                auth_secret = os.getenv("AUTH_SECRET")
+                if auth_secret and auth_secret != ADMIN_SESSION_SECRET:
+                    alt_sig = hmac.new(
+                        auth_secret.encode("utf-8"),
+                        payload_b64.encode("ascii"),
+                        hashlib.sha256,
+                    ).digest()
+                    sig_match = hmac.compare_digest(sig_b64, _b64url_encode(alt_sig))
+
+            if sig_match:
                 try:
                     raw_payload = _b64url_decode(payload_b64).decode("utf-8")
                     payload = json.loads(raw_payload)
                     exp = int(payload.get("exp", 0))
                     if time.time() > exp:
                         raise HTTPException(401, "Session expired — please log in again")
+                    
+                    # Strictly enforce admin role check
+                    role = payload.get("role")
+                    if role and role != "admin":
+                        raise HTTPException(403, "Forbidden: Administrator privileges required")
+
                     return str(payload.get("sub", ADMIN_USERNAME))
                 except HTTPException:
                     raise
@@ -152,6 +174,8 @@ def _validate_session(authorization: Optional[str]) -> str:
         if time.time() - session["created_at"] > _SESSION_TTL:
             del _sessions[token]
             raise HTTPException(401, "Session expired — please log in again")
+        if session.get("role") and session.get("role") != "admin":
+            raise HTTPException(403, "Forbidden: Administrator privileges required")
         return str(session["username"])
 
     raise HTTPException(401, "Invalid or expired session token")
@@ -163,10 +187,22 @@ def _validate_session(authorization: Optional[str]) -> str:
 @router.post("/login")
 def login(body: LoginRequest) -> LoginResponse:
     """Authenticate with admin credentials."""
-    if body.username != ADMIN_USERNAME or body.password != ADMIN_PASSWORD:
-        raise HTTPException(401, "Invalid credentials")
-    token = _create_session(body.username)
-    return LoginResponse(token=token, username=body.username)
+    username_norm = body.username.strip().lower()
+    admin_norm = ADMIN_USERNAME.strip().lower()
+    admin_email_norm = os.getenv("ADMIN_EMAIL", "admin@upifraud.internal").strip().lower()
+
+    if (username_norm == admin_norm or username_norm == admin_email_norm) and body.password == ADMIN_PASSWORD:
+        token = _create_session(body.username, role="admin")
+        return LoginResponse(token=token, username=body.username)
+
+    # Check database/memory users for admin role
+    from api.database import get_user_by_email, verify_password
+    user = get_user_by_email(username_norm)
+    if user and user.get("role") == "admin" and verify_password(body.password, user.get("password_hash", "")):
+        token = _create_session(user.get("full_name") or user.get("email"), role="admin")
+        return LoginResponse(token=token, username=user.get("email"))
+
+    raise HTTPException(401, "Invalid credentials")
 
 
 # ── Payments feed ────────────────────────────────────────────────────────────

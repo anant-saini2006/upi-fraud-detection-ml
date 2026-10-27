@@ -5,10 +5,12 @@ import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AppShell from '@/components/AppShell';
 import { api, clearAdminToken, getAdminToken } from '@/lib/api';
+import { useAuth } from '@/lib/auth-context';
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { user, isLoading: isAuthLoading, logout } = useAuth();
 
   const [reviewCount, setReviewCount] = useState<number>(0);
   const [simulating, setSimulating] = useState<boolean>(false);
@@ -25,16 +27,27 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       setIsCheckingAuth(false);
       return;
     }
+    if (isAuthLoading) {
+      return;
+    }
+
     const token = getAdminToken();
-    if (!token) {
-      setIsAuthenticated(false);
+    if (user) {
+      if (user.role === 'admin') {
+        setIsAuthenticated(true);
+      } else {
+        setIsAuthenticated(false);
+      }
       setIsCheckingAuth(false);
-      window.location.href = '/admin/login';
-    } else {
+    } else if (token) {
       setIsAuthenticated(true);
       setIsCheckingAuth(false);
+    } else {
+      setIsAuthenticated(false);
+      setIsCheckingAuth(false);
+      window.location.href = '/login?redirect=/admin';
     }
-  }, [pathname, isLoginPage]);
+  }, [pathname, isLoginPage, isAuthLoading, user]);
 
   // Review count poller
   useEffect(() => {
@@ -96,19 +109,50 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
   const handleLogout = () => {
     clearAdminToken();
-    window.location.href = '/admin/login';
+    logout();
   };
 
   if (isLoginPage) {
     return <>{children}</>;
   }
 
-  if (isCheckingAuth || !isAuthenticated) {
+  if (isAuthLoading || isCheckingAuth) {
     return (
       <AppShell>
         <div className="flex flex-col items-center justify-center min-h-[50vh] space-y-3">
           <div className="w-8 h-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-          <p className="text-xs text-text-muted">Verifying administrator session...</p>
+          <p className="text-xs text-text-muted">Verifying administrator permissions...</p>
+        </div>
+      </AppShell>
+    );
+  }
+
+  if (user && user.role !== 'admin') {
+    return (
+      <AppShell>
+        <div className="max-w-lg mx-auto my-12 bg-bg-card border border-red-200 rounded-2xl p-8 shadow-card text-center space-y-4">
+          <div className="w-14 h-14 rounded-2xl bg-red-50 text-danger flex items-center justify-center mx-auto border border-red-200">
+            <span className="material-symbols-outlined text-3xl">gpp_bad</span>
+          </div>
+          <h2 className="text-xl font-bold text-text-primary">403 — Administrator Access Required</h2>
+          <p className="text-xs text-text-secondary leading-relaxed">
+            Your account (<span className="font-semibold text-text-primary">{user.email}</span>) has regular <strong>User</strong> privileges.
+            The Admin Console is strictly restricted to system administrators.
+          </p>
+          <div className="pt-2 flex flex-col sm:flex-row items-center justify-center gap-3">
+            <Link
+              href="/"
+              className="w-full sm:w-auto px-4 py-2 bg-primary hover:bg-primary-dark text-white rounded-lg text-xs font-semibold shadow-sm transition"
+            >
+              Return to Dashboard
+            </Link>
+            <Link
+              href="/login?redirect=/admin"
+              className="w-full sm:w-auto px-4 py-2 border border-border-light bg-white hover:bg-gray-50 text-text-primary rounded-lg text-xs font-semibold transition"
+            >
+              Sign In as Admin
+            </Link>
+          </div>
         </div>
       </AppShell>
     );

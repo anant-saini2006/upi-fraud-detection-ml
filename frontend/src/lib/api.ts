@@ -11,15 +11,36 @@ const API_BASE = (
 ).replace(/\/$/, '');
 const GATEWAY_TEST_KEY = process.env.NEXT_PUBLIC_GATEWAY_KEY?.trim() || 'sk_test_demo_key_001';
 
-// Admin session storage helpers
+// User & Admin session storage helpers
+export function getAuthToken(): string | null {
+  if (typeof window === 'undefined') return null;
+  return localStorage.getItem('auth_session_token') || localStorage.getItem('admin_session_token');
+}
+
+export function setAuthToken(token: string): void {
+  if (typeof window !== 'undefined') {
+    localStorage.setItem('auth_session_token', token);
+  }
+}
+
+export function clearAuthToken(): void {
+  if (typeof window !== 'undefined') {
+    localStorage.removeItem('auth_session_token');
+    localStorage.removeItem('admin_session_token');
+    localStorage.removeItem('auth_user_cache');
+  }
+}
+
+// Admin session storage helpers (backward compatibility)
 export function getAdminToken(): string | null {
   if (typeof window === 'undefined') return null;
-  return localStorage.getItem('admin_session_token');
+  return localStorage.getItem('admin_session_token') || localStorage.getItem('auth_session_token');
 }
 
 export function setAdminToken(token: string): void {
   if (typeof window !== 'undefined') {
     localStorage.setItem('admin_session_token', token);
+    localStorage.setItem('auth_session_token', token);
   }
 }
 
@@ -37,8 +58,10 @@ async function request<T>(
     headers?: Record<string, string>;
   } = {}
 ): Promise<T> {
+  const token = getAuthToken();
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
+    ...(token && !options.headers?.Authorization ? { Authorization: `Bearer ${token}` } : {}),
     ...(options.headers || {}),
   };
 
@@ -61,7 +84,7 @@ async function request<T>(
     if (res.status === 401 && path.startsWith('/api/admin') && path !== '/api/admin/login') {
       clearAdminToken();
       if (typeof window !== 'undefined' && window.location.pathname.startsWith('/admin') && window.location.pathname !== '/admin/login') {
-        window.location.href = '/admin/login';
+        window.location.href = '/login?redirect=' + encodeURIComponent(window.location.pathname);
       }
     }
     throw new Error(errorDetail);
@@ -70,6 +93,20 @@ async function request<T>(
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: number;
+  email: string;
+  full_name: string;
+  role: 'user' | 'admin';
+  created_at?: string;
+}
+
+export interface AuthResponse {
+  status: string;
+  user: AuthUser;
+  token: string;
+}
 
 export interface Stats {
   total_transactions: number;
@@ -408,6 +445,29 @@ export const api = {
       headers: token ? { Authorization: `Bearer ${token}` } : {},
     });
   },
+
+  authSignup: (data: { full_name: string; email: string; password: string }) =>
+    request<AuthResponse>('/api/auth/signup', {
+      method: 'POST',
+      body: data,
+    }),
+
+  authLogin: (data: { email: string; password: string }) =>
+    request<AuthResponse>('/api/auth/login', {
+      method: 'POST',
+      body: data,
+    }),
+
+  authLogout: () =>
+    request<{ status: string; message?: string }>('/api/auth/logout', {
+      method: 'POST',
+    }),
+
+  authMe: () =>
+    request<AuthUser>('/api/auth/me'),
+
+  adminListUsers: () =>
+    request<AuthUser[]>('/api/auth/users'),
 };
 
 export async function parseAndAnalyseCsvClient(file: File): Promise<CsvAnalysis> {

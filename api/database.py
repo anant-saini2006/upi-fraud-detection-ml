@@ -14,8 +14,10 @@ Tables managed by this module:
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import secrets
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -156,6 +158,21 @@ CREATE TABLE IF NOT EXISTS settings (
     value           JSONB NOT NULL,
     updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+-- Authenticated users
+CREATE TABLE IF NOT EXISTS users (
+    id              BIGSERIAL PRIMARY KEY,
+    email           TEXT NOT NULL UNIQUE,
+    password_hash   TEXT NOT NULL,
+    full_name       TEXT NOT NULL,
+    role            TEXT NOT NULL DEFAULT 'user',
+    created_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at      TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Backward-compat columns on predictions
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS user_id BIGINT;
+ALTER TABLE predictions ADD COLUMN IF NOT EXISTS user_email TEXT;
 """
 
 _SEED_ACCOUNTS = [
@@ -248,6 +265,70 @@ _MEMORY_REVIEWS: list[dict[str, Any]] = []
 _MEMORY_SETTINGS: dict[str, Any] = dict(_DEFAULT_SETTINGS)
 
 
+# ── Password Hashing (PBKDF2-HMAC-SHA256) ───────────────────────────────────
+
+def hash_password(password: str) -> str:
+    """Hash password using standard PBKDF2-HMAC-SHA256 with random salt."""
+    salt = secrets.token_hex(16)
+    iterations = 200_000
+    derived = hashlib.pbkdf2_hmac("sha256", password.encode("utf-8"), salt.encode("utf-8"), iterations)
+    return f"pbkdf2_sha256${iterations}${salt}${derived.hex()}"
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify password against stored PBKDF2 hash using constant-time comparison."""
+    try:
+        parts = hashed_password.split("$")
+        if len(parts) != 4 or parts[0] != "pbkdf2_sha256":
+            return False
+        iterations = int(parts[1])
+        salt = parts[2]
+        expected_hex = parts[3]
+        derived = hashlib.pbkdf2_hmac("sha256", plain_password.encode("utf-8"), salt.encode("utf-8"), iterations)
+        return secrets.compare_digest(derived.hex(), expected_hex)
+    except Exception:
+        return False
+
+
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "admin")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "demo1234")
+ADMIN_EMAIL = os.getenv(
+    "ADMIN_EMAIL",
+    f"{ADMIN_USERNAME}@upifraud.internal" if "@" not in ADMIN_USERNAME else ADMIN_USERNAME,
+)
+
+_MEMORY_USERS: dict[str, dict[str, Any]] = {
+    ADMIN_EMAIL.lower(): {
+        "id": 1,
+        "email": ADMIN_EMAIL.lower(),
+        "password_hash": hash_password(ADMIN_PASSWORD),
+        "full_name": "System Administrator",
+        "role": "admin",
+        "created_at": "2026-10-19T10:00:00Z",
+    },
+    "admin": {
+        "id": 1,
+        "email": ADMIN_EMAIL.lower(),
+        "password_hash": hash_password(ADMIN_PASSWORD),
+        "full_name": "System Administrator",
+        "role": "admin",
+        "created_at": "2026-10-19T10:00:00Z",
+    },
+    "user@example.com": {
+        "id": 2,
+        "email": "user@example.com",
+        "password_hash": hash_password("user1234"),
+        "full_name": "Demo User",
+        "role": "user",
+        "created_at": "2026-10-19T10:00:00Z",
+    },
+}
+
+_MEMORY_PREDICTIONS: list[dict[str, Any]] = []
+_MEMORY_PREDICTION_COUNTER: int = 1000
+_MEMORY_USER_COUNTER: int = 3
+
+
 def initialise_database() -> bool:
     """Create all tables and seed data when PostgreSQL is configured.
 
@@ -286,6 +367,36 @@ def initialise_database() -> bool:
                         (key, json.dumps(value)),
                     )
 
+                # Seed admin user (idempotent).
+                cursor.execute(
+                    """
+                    INSERT INTO users (email, password_hash, full_name, role)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (email) DO NOTHING
+                    """,
+                    (
+                        ADMIN_EMAIL.lower(),
+                        hash_password(ADMIN_PASSWORD),
+                        "System Administrator",
+                        "admin",
+                    ),
+                )
+
+                # Seed demo regular user (idempotent).
+                cursor.execute(
+                    """
+                    INSERT INTO users (email, password_hash, full_name, role)
+                    VALUES (%s, %s, %s, %s)
+                    ON CONFLICT (email) DO NOTHING
+                    """,
+                    (
+                        "user@example.com",
+                        hash_password("user1234"),
+                        "Demo User",
+                        "user",
+                    ),
+                )
+
         _last_error = None
         return True
     except Exception as exc:  # pragma: no cover
@@ -293,7 +404,210 @@ def initialise_database() -> bool:
         return False
 
 
-# ── Prediction history (backward compat) ─────────────────────────────────────
+# ── User management ──────────────────────────────────────────────────────────
+
+
+def create_user(
+    *,
+    email: str,
+    password_hash: str,
+    full_name: str,
+    role: str = "user",
+) -> dict[str, Any]:
+    """Create a new user record. Public signup always passes role='user'."""
+    global _last_error, _MEMORY_USER_COUNTER
+    norm_email = email.strip().lower()
+    norm_name = full_name.strip()
+    norm_role = "admin" if role == "admin" else "user"
+    now_iso = datetime.now(timezone.utc).isoformat()
+
+    if not is_configured():
+        if norm_email in _MEMORY_USERS:
+            raise ValueError(f"User with email '{norm_email}' already exists.")
+        _MEMORY_USER_COUNTER += 1
+        user_record = {
+            "id": _MEMORY_USER_COUNTER,
+            "email": norm_email,
+            "password_hash": password_hash,
+            "full_name": norm_name,
+            "role": norm_role,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        _MEMORY_USERS[norm_email] = user_record
+        return user_record
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    INSERT INTO users (email, password_hash, full_name, role)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING id, email, password_hash, full_name, role, created_at, updated_at
+                    """,
+                    (norm_email, password_hash, norm_name, norm_role),
+                )
+                row = cursor.fetchone()
+        _last_error = None
+        return {
+            "id": int(row[0]),
+            "email": str(row[1]),
+            "password_hash": str(row[2]),
+            "full_name": str(row[3]),
+            "role": str(row[4]),
+            "created_at": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]),
+            "updated_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]),
+        }
+    except Exception as exc:
+        _last_error = str(exc)
+        if "duplicate" in str(exc).lower() or "unique" in str(exc).lower():
+            raise ValueError(f"User with email '{norm_email}' already exists.")
+        # Fallback to memory
+        if norm_email in _MEMORY_USERS:
+            raise ValueError(f"User with email '{norm_email}' already exists.")
+        _MEMORY_USER_COUNTER += 1
+        user_record = {
+            "id": _MEMORY_USER_COUNTER,
+            "email": norm_email,
+            "password_hash": password_hash,
+            "full_name": norm_name,
+            "role": norm_role,
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+        _MEMORY_USERS[norm_email] = user_record
+        return user_record
+
+
+def get_user_by_email(email: str) -> Optional[dict[str, Any]]:
+    """Look up user by email or username."""
+    norm_email = email.strip().lower()
+    if not is_configured():
+        return _MEMORY_USERS.get(norm_email)
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, email, password_hash, full_name, role, created_at
+                    FROM users WHERE LOWER(email) = %s
+                    """,
+                    (norm_email,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            return _MEMORY_USERS.get(norm_email)
+        return {
+            "id": int(row[0]),
+            "email": str(row[1]),
+            "password_hash": str(row[2]),
+            "full_name": str(row[3]),
+            "role": str(row[4]),
+            "created_at": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]),
+        }
+    except Exception:
+        return _MEMORY_USERS.get(norm_email)
+
+
+def get_user_by_id(user_id: int) -> Optional[dict[str, Any]]:
+    """Look up user by numeric ID."""
+    if not is_configured():
+        for u in _MEMORY_USERS.values():
+            if u.get("id") == user_id:
+                return u
+        return None
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, email, password_hash, full_name, role, created_at
+                    FROM users WHERE id = %s
+                    """,
+                    (user_id,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            for u in _MEMORY_USERS.values():
+                if u.get("id") == user_id:
+                    return u
+            return None
+        return {
+            "id": int(row[0]),
+            "email": str(row[1]),
+            "password_hash": str(row[2]),
+            "full_name": str(row[3]),
+            "role": str(row[4]),
+            "created_at": row[5].isoformat() if hasattr(row[5], "isoformat") else str(row[5]),
+        }
+    except Exception:
+        for u in _MEMORY_USERS.values():
+            if u.get("id") == user_id:
+                return u
+        return None
+
+
+def list_users() -> list[dict[str, Any]]:
+    """List all registered users (for admin management)."""
+    if not is_configured():
+        seen = set()
+        res = []
+        for u in _MEMORY_USERS.values():
+            if u["email"] not in seen:
+                seen.add(u["email"])
+                res.append(
+                    {
+                        "id": u["id"],
+                        "email": u["email"],
+                        "full_name": u["full_name"],
+                        "role": u["role"],
+                        "created_at": u.get("created_at"),
+                    }
+                )
+        return sorted(res, key=lambda x: x["id"])
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, email, full_name, role, created_at
+                    FROM users ORDER BY id ASC
+                    """
+                )
+                rows = cursor.fetchall()
+        return [
+            {
+                "id": int(r[0]),
+                "email": str(r[1]),
+                "full_name": str(r[2]),
+                "role": str(r[3]),
+                "created_at": r[4].isoformat() if hasattr(r[4], "isoformat") else str(r[4]),
+            }
+            for r in rows
+        ]
+    except Exception:
+        seen = set()
+        res = []
+        for u in _MEMORY_USERS.values():
+            if u["email"] not in seen:
+                seen.add(u["email"])
+                res.append(
+                    {
+                        "id": u["id"],
+                        "email": u["email"],
+                        "full_name": u["full_name"],
+                        "role": u["role"],
+                        "created_at": u.get("created_at"),
+                    }
+                )
+        return sorted(res, key=lambda x: x["id"])
+
+
+# ── Prediction history ───────────────────────────────────────────────────────
 
 
 def record_prediction(
@@ -304,11 +618,29 @@ def record_prediction(
     prediction: str,
     fraud_probability: float,
     risk_level: str,
+    user_id: Optional[int] = None,
+    user_email: Optional[str] = None,
 ) -> bool:
-    """Persist one prediction, returning False if persistence is unavailable."""
-    global _last_error
+    """Persist one prediction with optional user attribution."""
+    global _last_error, _MEMORY_PREDICTION_COUNTER
+    now = datetime.now(timezone.utc)
+    _MEMORY_PREDICTION_COUNTER += 1
+    mem_rec = {
+        "id": _MEMORY_PREDICTION_COUNTER,
+        "amount": round(amount, 2),
+        "transaction_type": transaction_type,
+        "hour_of_day": hour_of_day,
+        "prediction": prediction,
+        "fraud_probability": round(fraud_probability, 6),
+        "risk_level": risk_level,
+        "user_id": user_id,
+        "user_email": user_email.lower() if user_email else None,
+        "created_at": now.isoformat(),
+    }
+    _MEMORY_PREDICTIONS.insert(0, mem_rec)
+
     if not is_configured():
-        return False
+        return True
 
     try:
         with _connection() as connection:
@@ -317,8 +649,8 @@ def record_prediction(
                     """
                     INSERT INTO predictions (
                         amount, transaction_type, hour_of_day, prediction,
-                        fraud_probability, risk_level, created_at
-                    ) VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        fraud_probability, risk_level, user_id, user_email, created_at
+                    ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         round(amount, 2),
@@ -327,36 +659,71 @@ def record_prediction(
                         prediction,
                         round(fraud_probability, 6),
                         risk_level,
-                        datetime.now(timezone.utc),
+                        user_id,
+                        user_email.lower() if user_email else None,
+                        now,
                     ),
                 )
         _last_error = None
         return True
     except Exception as exc:  # pragma: no cover
         _last_error = str(exc)
-        return False
+        # Even if Neon write fails, we recorded in memory
+        return True
 
 
-def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
-    """Return recent predictions, or an empty list without an active database."""
+def get_recent_predictions(
+    limit: Any = 10,
+    user_id: Optional[int] = None,
+    user_email: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    """Return recent predictions, filtered by user if requested."""
     global _last_error
-    if not is_configured():
-        return []
+    try:
+        safe_limit = max(1, min(int(limit), 100))
+    except (ValueError, TypeError):
+        safe_limit = 10
+    norm_email = user_email.strip().lower() if user_email else None
 
-    safe_limit = max(1, min(int(limit), 100))
+    if not is_configured():
+        filtered = []
+        for p in _MEMORY_PREDICTIONS:
+            if user_id is not None or norm_email is not None:
+                matches_id = user_id is not None and p.get("user_id") == user_id
+                matches_email = norm_email is not None and p.get("user_email") == norm_email
+                if not (matches_id or matches_email):
+                    continue
+            filtered.append(p)
+            if len(filtered) >= safe_limit:
+                break
+        return filtered
+
     try:
         with _connection() as connection:
             with connection.cursor() as cursor:
-                cursor.execute(
-                    """
-                    SELECT id, amount, transaction_type, prediction,
-                           fraud_probability, risk_level, created_at
-                    FROM predictions
-                    ORDER BY created_at DESC
-                    LIMIT %s
-                    """,
-                    (safe_limit,),
-                )
+                if user_id is not None or norm_email is not None:
+                    cursor.execute(
+                        """
+                        SELECT id, amount, transaction_type, prediction,
+                               fraud_probability, risk_level, created_at, user_id, user_email
+                        FROM predictions
+                        WHERE (user_id = %s OR user_email = %s)
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (user_id, norm_email, safe_limit),
+                    )
+                else:
+                    cursor.execute(
+                        """
+                        SELECT id, amount, transaction_type, prediction,
+                               fraud_probability, risk_level, created_at, user_id, user_email
+                        FROM predictions
+                        ORDER BY created_at DESC
+                        LIMIT %s
+                        """,
+                        (safe_limit,),
+                    )
                 rows = cursor.fetchall()
 
         _last_error = None
@@ -368,13 +735,68 @@ def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
                 "prediction": str(row[3]),
                 "fraud_probability": float(row[4]),
                 "risk_level": str(row[5]),
-                "created_at": row[6].isoformat(),
+                "created_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]),
+                "user_id": row[7],
+                "user_email": row[8],
             }
             for row in rows
         ]
     except Exception as exc:  # pragma: no cover
         _last_error = str(exc)
-        return []
+        filtered = []
+        for p in _MEMORY_PREDICTIONS:
+            if user_id is not None or norm_email is not None:
+                matches_id = user_id is not None and p.get("user_id") == user_id
+                matches_email = norm_email is not None and p.get("user_email") == norm_email
+                if not (matches_id or matches_email):
+                    continue
+            filtered.append(p)
+            if len(filtered) >= safe_limit:
+                break
+        return filtered
+
+
+def get_prediction_by_id(prediction_id: int) -> Optional[dict[str, Any]]:
+    """Return a single prediction by ID with ownership attributes."""
+    if not is_configured():
+        for p in _MEMORY_PREDICTIONS:
+            if p.get("id") == prediction_id:
+                return p
+        return None
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT id, amount, transaction_type, prediction,
+                           fraud_probability, risk_level, created_at, user_id, user_email
+                    FROM predictions WHERE id = %s
+                    """,
+                    (prediction_id,),
+                )
+                row = cursor.fetchone()
+        if row is None:
+            for p in _MEMORY_PREDICTIONS:
+                if p.get("id") == prediction_id:
+                    return p
+            return None
+        return {
+            "id": int(row[0]),
+            "amount": float(row[1]),
+            "transaction_type": str(row[2]),
+            "prediction": str(row[3]),
+            "fraud_probability": float(row[4]),
+            "risk_level": str(row[5]),
+            "created_at": row[6].isoformat() if hasattr(row[6], "isoformat") else str(row[6]),
+            "user_id": row[7],
+            "user_email": row[8],
+        }
+    except Exception:
+        for p in _MEMORY_PREDICTIONS:
+            if p.get("id") == prediction_id:
+                return p
+        return None
 
 
 # ── Account operations ───────────────────────────────────────────────────────

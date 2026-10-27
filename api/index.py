@@ -29,7 +29,7 @@ for _p in [str(_ROOT), str(_HERE)]:
 import joblib
 import numpy as np
 import pandas as pd
-from fastapi import FastAPI, File, HTTPException, Query, Request, UploadFile
+from fastapi import FastAPI, File, Header, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -55,6 +55,7 @@ _DATABASE_LOAD_ERROR: str | None = None
 try:
     try:
         from api.database import (
+            get_prediction_by_id,
             get_recent_predictions,
             initialise_database,
             record_prediction,
@@ -62,6 +63,7 @@ try:
         )
     except (ImportError, ModuleNotFoundError):
         from database import (
+            get_prediction_by_id,
             get_recent_predictions,
             initialise_database,
             record_prediction,
@@ -80,14 +82,29 @@ except Exception as _exc:
             "last_error": _DATABASE_LOAD_ERROR,
         }
 
-    def get_recent_predictions(limit: int = 10) -> list[dict[str, Any]]:
+    def get_recent_predictions(limit: int = 10, **kwargs: Any) -> list[dict[str, Any]]:
         return []
+
+    def get_prediction_by_id(prediction_id: int) -> Optional[dict[str, Any]]:
+        return None
 
     def record_prediction(**kwargs: Any) -> bool:
         return False
 
     def initialise_database() -> bool:
         return False
+
+# Optional auth helper imports
+try:
+    try:
+        from api.auth import get_current_user, get_optional_user
+    except (ImportError, ModuleNotFoundError):
+        from auth import get_current_user, get_optional_user
+except Exception:
+    def get_optional_user(*args: Any, **kwargs: Any) -> Optional[dict[str, Any]]:
+        return None
+    def get_current_user(*args: Any, **kwargs: Any) -> dict[str, Any]:
+        raise HTTPException(401, "Authentication required")
 
 # Razorpay payment integration (optional — graceful if deps missing)
 try:
@@ -552,7 +569,11 @@ def stats() -> dict[str, Any]:
 
 
 @app.post("/api/predict", response_model=PredictionResponse)
-def predict(transaction: TransactionInput) -> PredictionResponse:
+def predict(
+    transaction: TransactionInput,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+) -> PredictionResponse:
     """Produce one instant prediction alongside a transaction validation and risk policy assessment."""
     # 1. Structural validation of transaction inputs
     val = validate_transaction_inputs(
@@ -629,6 +650,15 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
         merchant_category=transaction.merchant_category,
     )
 
+    # Associate with user if authenticated
+    current_user = (
+        get_optional_user(request, authorization)
+        if (request is not None or authorization is not None)
+        else None
+    )
+    user_id = current_user.get("id") if current_user else None
+    user_email = current_user.get("email") if current_user else None
+
     saved_to_history = record_prediction(
         amount=transaction.amount,
         transaction_type=transaction.transaction_type,
@@ -636,6 +666,8 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
         prediction=prediction,
         fraud_probability=probability,
         risk_level=risk_level,
+        user_id=user_id,
+        user_email=user_email,
     )
 
     return PredictionResponse(
@@ -658,12 +690,58 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
 
 
 @app.get("/api/predictions")
-def recent_predictions(limit: int = Query(default=10, ge=1, le=100)) -> dict[str, Any]:
-    """Return Neon-backed history when ``DATABASE_URL`` is configured."""
+def recent_predictions(
+    limit: int = Query(default=10, ge=1, le=100),
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+) -> dict[str, Any]:
+    """Return Neon-backed history when ``DATABASE_URL`` is configured.
+    Filters to authenticated user's records when regular user.
+    """
+    safe_limit = limit if isinstance(limit, int) else 10
+    current_user = (
+        get_optional_user(request, authorization)
+        if (request is not None or authorization is not None)
+        else None
+    )
+    user_id = None
+    user_email = None
+    if current_user and current_user.get("role") == "user":
+        user_id = current_user.get("id")
+        user_email = current_user.get("email")
+
     return {
-        "predictions": get_recent_predictions(limit),
+        "predictions": get_recent_predictions(safe_limit, user_id=user_id, user_email=user_email),
         "persistence": database_status(),
     }
+
+
+@app.get("/api/predictions/{prediction_id}")
+def get_prediction_detail(
+    prediction_id: int,
+    request: Request = None,
+    authorization: Optional[str] = Header(None),
+) -> dict[str, Any]:
+    """Retrieve details for a single prediction with strict ownership authorization."""
+    pred = get_prediction_by_id(prediction_id)
+    if not pred:
+        raise HTTPException(404, f"Prediction #{prediction_id} not found")
+
+    pred_user_id = pred.get("user_id")
+    pred_user_email = pred.get("user_email")
+
+    # If prediction was associated with a user, enforce access policy
+    if pred_user_id or pred_user_email:
+        current_user = get_optional_user(request, authorization)
+        if not current_user:
+            raise HTTPException(401, "Authentication required to access this prediction")
+        if current_user.get("role") != "admin":
+            matches_id = pred_user_id is not None and current_user.get("id") == pred_user_id
+            matches_email = pred_user_email is not None and current_user.get("email") == pred_user_email
+            if not (matches_id or matches_email):
+                raise HTTPException(403, "Forbidden: You cannot access another user's prediction records")
+
+    return pred
 
 
 @app.get("/api/charts/fraud-by-type")
@@ -893,7 +971,16 @@ def warmup() -> dict[str, Any]:
     return {"status": "warm", "dummy_probability": round(prob, 4)}
 
 
-# Mount gateway and admin routers safely
+# Mount auth, gateway and admin routers safely
+try:
+    try:
+        from api.auth import router as auth_router        # noqa: E402
+    except (ImportError, ModuleNotFoundError):
+        from auth import router as auth_router            # noqa: E402
+    app.include_router(auth_router)
+except Exception as _auth_exc:
+    warnings.warn(f"Auth router disabled: {_auth_exc}")
+
 try:
     try:
         from api.gateway import router as gateway_router  # noqa: E402
@@ -911,5 +998,6 @@ try:
     app.include_router(admin_router)
 except Exception as _adm_exc:
     warnings.warn(f"Admin router disabled: {_adm_exc}")
+
 
 
