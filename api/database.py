@@ -653,6 +653,53 @@ def get_payment(payment_id: str) -> Optional[dict[str, Any]]:
         return _MEMORY_PAYMENTS.get(payment_id)
 
 
+def get_recent_sender_payment_count(sender_vpa: str, window_seconds: int = 60) -> int:
+    """Return count of recent payments initiated by sender_vpa within window_seconds."""
+    count = 0
+    now = datetime.now(timezone.utc)
+    if not is_configured():
+        for p in _MEMORY_PAYMENTS.values():
+            if p.get("sender_vpa") == sender_vpa:
+                created_at_str = p.get("created_at")
+                if created_at_str:
+                    try:
+                        created_at = datetime.fromisoformat(str(created_at_str).replace("Z", "+00:00"))
+                        if (now - created_at).total_seconds() <= window_seconds:
+                            count += 1
+                    except Exception:
+                        count += 1
+        return count
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    SELECT COUNT(*) FROM payments
+                    WHERE sender_vpa = %s
+                      AND created_at >= NOW() - (%s || ' seconds')::INTERVAL
+                    """,
+                    (sender_vpa, str(int(window_seconds))),
+                )
+                row = cursor.fetchone()
+                if row:
+                    return int(row[0])
+    except Exception:
+        pass
+
+    for p in _MEMORY_PAYMENTS.values():
+        if p.get("sender_vpa") == sender_vpa:
+            created_at_str = p.get("created_at")
+            if created_at_str:
+                try:
+                    created_at = datetime.fromisoformat(str(created_at_str).replace("Z", "+00:00"))
+                    if (now - created_at).total_seconds() <= window_seconds:
+                        count += 1
+                except Exception:
+                    pass
+    return count
+
+
 def update_payment_scoring(
     payment_id: str,
     *,
@@ -713,6 +760,39 @@ def update_payment_scoring(
         return True
     except Exception:
         return p is not None
+
+
+def cancel_payment(
+    payment_id: str,
+    decline_reason: str = "Cancelled by user",
+) -> Optional[dict[str, Any]]:
+    """Transition an unconfirmed payment to cancelled status."""
+    p = _MEMORY_PAYMENTS.get(payment_id)
+    if p:
+        p["status"] = "cancelled"
+        p["decline_reason"] = decline_reason
+        p["confirmed_at"] = datetime.now(timezone.utc).isoformat()
+
+    if not is_configured():
+        return p
+
+    try:
+        with _connection() as connection:
+            with connection.cursor() as cursor:
+                cursor.execute(
+                    """
+                    UPDATE payments
+                    SET status = 'cancelled',
+                        decline_reason = %s,
+                        confirmed_at = NOW()
+                    WHERE id = %s
+                    """,
+                    (decline_reason, payment_id),
+                )
+        return get_payment(payment_id)
+    except Exception:
+        return p
+
 
 
 def list_payments(

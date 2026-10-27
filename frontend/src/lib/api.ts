@@ -4,7 +4,11 @@
  * All components import from here — single source of truth for API calls.
  */
 
-const API_BASE = (process.env.NEXT_PUBLIC_API_URL?.trim() || (typeof window !== 'undefined' ? '' : 'http://localhost:8000')).replace(/\/$/, '');
+const API_BASE = (
+  typeof window !== 'undefined'
+    ? ''
+    : (process.env.NEXT_PUBLIC_API_URL?.trim() || 'http://localhost:8000')
+).replace(/\/$/, '');
 const GATEWAY_TEST_KEY = process.env.NEXT_PUBLIC_GATEWAY_KEY?.trim() || 'sk_test_demo_key_001';
 
 // Admin session storage helpers
@@ -106,6 +110,7 @@ export interface PredictionInput {
   new_balance_orig: number;
   old_balance_dest: number;
   new_balance_dest: number;
+  merchant_category?: string;
 }
 
 export interface PredictionResult {
@@ -116,6 +121,14 @@ export interface PredictionResult {
   error_balance_dest: number;
   is_high_value: boolean;
   saved_to_history: boolean;
+  input_valid?: boolean;
+  validation_errors?: string[];
+  policy_verdict?: 'PASS' | 'WARNING' | 'FLAGGED_FOR_REVIEW' | 'REJECTED' | 'OUT_OF_SCOPE';
+  policy_action?: 'ALLOW' | 'REVIEW' | 'REJECT';
+  reason_codes?: string[];
+  reasons?: string[];
+  policy_warnings?: string[];
+  reconciliation_note?: string;
 }
 
 export interface DatasetInfo {
@@ -219,7 +232,7 @@ export interface PaymentIntent {
   sender_vpa: string;
   receiver_vpa: string;
   description: string | null;
-  status: 'requires_payment_method' | 'processing' | 'succeeded' | 'requires_review' | 'blocked';
+  status: 'requires_payment_method' | 'processing' | 'succeeded' | 'requires_review' | 'blocked' | 'cancelled';
   scoring: ScoringResponse | null;
   decline_reason: string | null;
   created_at: string;
@@ -300,6 +313,15 @@ export const api = {
         Authorization: `Bearer ${GATEWAY_TEST_KEY}`,
       },
     }),
+
+  cancelPaymentIntent: (id: string) =>
+    request<PaymentIntent>(`/v1/payment_intents/${id}/cancel`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${GATEWAY_TEST_KEY}`,
+      },
+    }),
+
 
   // Admin API
   adminLogin: (body: { username: string; password: string }) =>

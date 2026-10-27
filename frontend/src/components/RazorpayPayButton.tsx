@@ -21,7 +21,13 @@ declare global {
   }
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || 'http://localhost:8000';
+const API_BASE = (
+  typeof window !== 'undefined'
+    ? ''
+    : (process.env.NEXT_PUBLIC_API_URL?.trim() ||
+       process.env.NEXT_PUBLIC_API_BASE_URL?.trim() ||
+       'http://localhost:8000')
+).replace(/\/$/, '');
 const RAZORPAY_KEY_ID = process.env.NEXT_PUBLIC_RAZORPAY_KEY_ID || '';
 
 /**
@@ -73,20 +79,21 @@ export default function RazorpayPayButton({
 
       if (!verifyRes.ok) {
         const err = await verifyRes.json().catch(() => ({}));
-        throw new Error(err.detail || 'Verification failed');
+        throw new Error(err.detail || `Verification failed (${verifyRes.status})`);
       }
 
       const result = await verifyRes.json();
       setStatus('success');
       setMessage(
-        `Payment verified! Status: ${result.gateway_status}` +
+        `Simulated payment verified! Status: ${result.gateway_status}` +
           (result.fraud_status ? ` · Fraud check: ${result.fraud_status}` : '')
       );
+      return result;
     } catch (verifyErr: any) {
       setStatus('error');
       setMessage(`Verification error: ${verifyErr.message}`);
+      throw verifyErr;
     } finally {
-      setMockModalOpen(false);
       setLoading(false);
     }
   };
@@ -208,8 +215,14 @@ export default function RazorpayPayButton({
         order={currentOrder}
         onClose={() => {
           setMockModalOpen(false);
-          setStatus('failed');
-          setMessage('Checkout was cancelled.');
+          setStatus((prev) => {
+            if (prev === 'success' || prev === 'error') return prev;
+            return 'failed';
+          });
+          setMessage((prev) => {
+            if (prev) return prev;
+            return 'Checkout was cancelled.';
+          });
         }}
         onSuccess={handleVerify}
         onFailure={(errMsg) => {

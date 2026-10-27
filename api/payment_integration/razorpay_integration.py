@@ -32,7 +32,7 @@ import uuid
 
 import razorpay
 from fastapi import APIRouter, HTTPException, Header, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import (
     Column,
     DateTime,
@@ -273,13 +273,29 @@ def _db() -> Session:
 # Pydantic models
 # ---------------------------------------------------------------------------
 class CreateOrderRequest(BaseModel):
-    product_id: str
+    product_id: str = Field(..., min_length=1, max_length=64)
+
+    @field_validator("product_id")
+    @classmethod
+    def validate_product_id(cls, value: str) -> str:
+        norm = value.strip()
+        if not norm:
+            raise ValueError("product_id cannot be blank.")
+        return norm
 
 
 class VerifyPaymentRequest(BaseModel):
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
+    razorpay_order_id: str = Field(..., min_length=1, max_length=64)
+    razorpay_payment_id: str = Field(..., min_length=1, max_length=64)
+    razorpay_signature: str = Field(..., min_length=1, max_length=256)
+
+    @field_validator("razorpay_order_id", "razorpay_payment_id", "razorpay_signature")
+    @classmethod
+    def validate_non_blank(cls, value: str) -> str:
+        norm = value.strip()
+        if not norm:
+            raise ValueError("Field cannot be blank.")
+        return norm
 
 
 # ---------------------------------------------------------------------------

@@ -49,6 +49,22 @@ function statusBadge(status: string) {
       </span>
     );
   }
+  if (status === 'cancelled') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+        Cancelled
+      </span>
+    );
+  }
+  if (status === 'requires_payment_method') {
+    return (
+      <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-blue-50 text-blue-700 border border-blue-200">
+        <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
+        Awaiting Auth
+      </span>
+    );
+  }
   return (
     <span className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-50 text-text-secondary border border-border-light">
       {status}
@@ -124,7 +140,19 @@ export default function AdminLiveFeedPage() {
     const succeededCount = payments.filter((p) => p.status === 'succeeded').length;
     const reviewCount = payments.filter((p) => p.status === 'requires_review').length;
     const blockedCount = payments.filter((p) => p.status === 'blocked').length;
-    return { totalCount, totalVolume, succeededCount, reviewCount, blockedCount };
+    const unconfirmedCount = payments.filter(
+      (p) => p.status === 'requires_payment_method' || p.status === 'cancelled'
+    ).length;
+    const evaluatedCount = succeededCount + reviewCount + blockedCount;
+    return {
+      totalCount,
+      totalVolume,
+      succeededCount,
+      reviewCount,
+      blockedCount,
+      unconfirmedCount,
+      evaluatedCount,
+    };
   }, [payments]);
 
   return (
@@ -141,7 +169,7 @@ export default function AdminLiveFeedPage() {
           </div>
           <h3 className="mt-1 text-xl font-semibold text-text-primary">Real-time Gateway Telemetry</h3>
           <p className="mt-1 max-w-3xl text-sm text-text-secondary leading-relaxed">
-            Real-time transaction stream passing through the Stripe-style gateway API and scored against the ML decision policy.
+            Real-time telemetry from simulated UPI payment gateway (mock sandbox mode using synthetic @testpay accounts). Transactions are scored against the trained PaySim ML decision engine and rule-based risk policies without touching live banking rails.
           </p>
         </div>
         <Link
@@ -160,7 +188,9 @@ export default function AdminLiveFeedPage() {
             <div>
               <p className="text-xs font-medium text-text-muted uppercase tracking-wider">Total Volume</p>
               <p className="text-2xl font-bold text-text-primary mt-1">{formatCurrency(stats.totalVolume)}</p>
-              <p className="text-xs text-text-muted mt-1">{stats.totalCount} total intents captured</p>
+              <p className="text-xs text-text-muted mt-1">
+                {stats.totalCount} total intents ({stats.evaluatedCount} evaluated · {stats.unconfirmedCount} unconfirmed)
+              </p>
             </div>
             <div className="w-10 h-10 rounded-xl bg-blue-100 flex items-center justify-center">
               <span className="material-symbols-outlined text-blue-600 text-xl" style={{ fontVariationSettings: "'FILL' 1" }}>
@@ -241,6 +271,8 @@ export default function AdminLiveFeedPage() {
               { label: 'Succeeded', value: 'succeeded' },
               { label: 'Review', value: 'requires_review' },
               { label: 'Blocked', value: 'blocked' },
+              { label: 'Unconfirmed', value: 'requires_payment_method' },
+              { label: 'Cancelled', value: 'cancelled' },
             ].map((f) => (
               <button
                 key={f.value}

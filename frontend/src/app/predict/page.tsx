@@ -187,39 +187,137 @@ export default function TransactionPrediction() {
             )}
 
             {result && !isSubmitting && (
-              <div className="space-y-5">
-                <div className={`rounded-xl border p-4 ${riskStyles(result.risk_level)}`}>
-                  <p className="text-xs font-semibold uppercase tracking-wider">Model result</p>
-                  <div className="mt-2 flex items-end justify-between gap-3">
-                    <span className="text-2xl font-bold">{result.prediction === 'FRAUD' ? 'Potential fraud' : 'Likely legitimate'}</span>
-                    <span className="rounded-full bg-white/70 px-2.5 py-1 text-xs font-bold">{result.risk_level} RISK</span>
+              <div className="space-y-4">
+                {/* 1. Risk Policy Assessment Outcome */}
+                <div
+                  className={`rounded-xl border p-4 ${
+                    result.policy_action === 'REJECT'
+                      ? 'bg-red-50 border-red-200 text-red-900'
+                      : result.policy_action === 'REVIEW'
+                      ? 'bg-amber-50 border-amber-200 text-amber-900'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider">Risk-Policy Assessment</span>
+                    <span
+                      className={`rounded-full px-2.5 py-0.5 text-xs font-bold ${
+                        result.policy_action === 'REJECT'
+                          ? 'bg-red-200/70 text-red-950'
+                          : result.policy_action === 'REVIEW'
+                          ? 'bg-amber-200/70 text-amber-950'
+                          : 'bg-emerald-200/70 text-emerald-950'
+                      }`}
+                    >
+                      {result.policy_action === 'REJECT'
+                        ? 'ACTION: REJECT'
+                        : result.policy_action === 'REVIEW'
+                        ? 'ACTION: MANUAL REVIEW'
+                        : 'ACTION: ALLOW'}
+                    </span>
                   </div>
-                  <p className="mt-2 text-sm">Fraud probability: <strong>{(result.fraud_probability * 100).toFixed(2)}%</strong></p>
+                  <h4 className="mt-2 text-xl font-bold">
+                    {result.policy_verdict === 'REJECTED'
+                      ? 'Transaction Policy: Rejected'
+                      : result.policy_verdict === 'FLAGGED_FOR_REVIEW'
+                      ? 'Review Recommended'
+                      : result.policy_verdict === 'WARNING'
+                      ? 'Advisory Warning'
+                      : 'Policy Check Passed'}
+                  </h4>
+                  <p className="mt-1 text-xs leading-relaxed opacity-90">
+                    Rule-based accounting integrity, physical balance movement, and UPI limits check.
+                  </p>
                 </div>
 
-                <dl className="space-y-3 text-sm">
-                  <div className="flex items-center justify-between gap-4 border-b border-border-light pb-3">
+                {/* 2. Machine Learning Model Estimate (Never changed) */}
+                <div className={`rounded-xl border p-4 ${riskStyles(result.risk_level)}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs font-semibold uppercase tracking-wider">ML Model Estimate</span>
+                    <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-bold font-mono">
+                      {result.risk_level} RISK
+                    </span>
+                  </div>
+                  <div className="mt-2 flex items-baseline justify-between gap-3">
+                    <span className="text-xl font-bold">
+                      {result.prediction === 'FRAUD' ? 'Potential fraud' : 'Likely legitimate'}
+                    </span>
+                    <span className="text-sm font-semibold">
+                      Prob: <strong>{(result.fraud_probability * 100).toFixed(2)}%</strong>
+                    </span>
+                  </div>
+                  <p className="mt-1.5 text-xs text-text-secondary leading-relaxed">
+                    Statistical estimate computed solely by the saved classifier on synthetic features.
+                  </p>
+                </div>
+
+                {/* 3. Reconciliation Callout (If model and policy differ) */}
+                {result.reconciliation_note && (
+                  <div className="rounded-lg border border-amber-300 bg-amber-50/90 p-3 text-xs text-amber-900 flex items-start gap-2">
+                    <span className="material-symbols-outlined text-base text-amber-700 shrink-0 mt-0.5">info</span>
+                    <div>
+                      <strong className="font-semibold">Reconciliation note:</strong> {result.reconciliation_note}
+                    </div>
+                  </div>
+                )}
+
+                {/* 4. Reason Codes and Explanations */}
+                {result.reason_codes && result.reason_codes.length > 0 && (
+                  <div className="rounded-xl border border-border-light bg-slate-50/50 p-3.5 space-y-2.5">
+                    <p className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
+                      Policy & Anomaly Reason Codes
+                    </p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {result.reason_codes.map((code) => (
+                        <span
+                          key={code}
+                          className="rounded-md border border-slate-300 bg-white px-2 py-1 font-mono text-[11px] font-semibold text-slate-800 shadow-xs"
+                        >
+                          {code}
+                        </span>
+                      ))}
+                    </div>
+                    {result.reasons && result.reasons.length > 0 && (
+                      <ul className="mt-2 space-y-1 text-xs text-text-secondary">
+                        {result.reasons.map((r, i) => (
+                          <li key={i} className="flex items-start gap-1.5 leading-snug">
+                            <span className="text-primary font-bold">•</span>
+                            <span>{r}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+
+                {/* 5. Metrics table */}
+                <dl className="space-y-2 text-xs pt-1 border-t border-border-light">
+                  <div className="flex items-center justify-between gap-4 py-1 border-b border-border-light">
                     <dt className="text-text-secondary">Entered amount</dt>
                     <dd className="font-semibold text-text-primary">{formatCurrency(input.amount)}</dd>
                   </div>
-                  <div className="flex items-center justify-between gap-4 border-b border-border-light pb-3">
-                    <dt className="text-text-secondary">Origin balance difference</dt>
-                    <dd className="font-semibold text-text-primary">{formatCurrency(result.error_balance_orig)}</dd>
+                  <div className="flex items-center justify-between gap-4 py-1 border-b border-border-light">
+                    <dt className="text-text-secondary">Origin balance mismatch</dt>
+                    <dd className={`font-semibold ${Math.abs(result.error_balance_orig) > 1 ? 'text-danger' : 'text-text-primary'}`}>
+                      {formatCurrency(result.error_balance_orig)}
+                    </dd>
                   </div>
-                  <div className="flex items-center justify-between gap-4 border-b border-border-light pb-3">
-                    <dt className="text-text-secondary">Destination balance difference</dt>
-                    <dd className="font-semibold text-text-primary">{formatCurrency(result.error_balance_dest)}</dd>
+                  <div className="flex items-center justify-between gap-4 py-1 border-b border-border-light">
+                    <dt className="text-text-secondary">Destination balance mismatch</dt>
+                    <dd className={`font-semibold ${Math.abs(result.error_balance_dest) > 1 ? 'text-danger' : 'text-text-primary'}`}>
+                      {formatCurrency(result.error_balance_dest)}
+                    </dd>
                   </div>
-                  <div className="flex items-center justify-between gap-4">
+                  <div className="flex items-center justify-between gap-4 py-1">
                     <dt className="text-text-secondary">High-value feature</dt>
-                    <dd className="font-semibold text-text-primary">{result.is_high_value ? 'Yes' : 'No'}</dd>
+                    <dd className="font-semibold text-text-primary">{result.is_high_value ? 'Triggered (95th %ile)' : 'No'}</dd>
                   </div>
                 </dl>
 
-                <p className="text-xs leading-relaxed text-text-muted">
+                <p className="text-[11px] leading-relaxed text-text-muted">
                   {result.saved_to_history
-                    ? 'This estimate was saved to the configured PostgreSQL prediction history.'
-                    : 'Prediction history is unavailable until the API is configured with PostgreSQL.'}
+                    ? 'This estimate and policy evaluation were saved to prediction history.'
+                    : 'Prediction history persistence requires configured PostgreSQL.'}
                 </p>
               </div>
             )}
@@ -229,3 +327,4 @@ export default function TransactionPrediction() {
     </AppShell>
   );
 }
+

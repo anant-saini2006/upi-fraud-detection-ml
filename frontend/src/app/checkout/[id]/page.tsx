@@ -54,6 +54,21 @@ export default function CheckoutPage() {
     };
   }, [id, router]);
 
+  const [cancelling, setCancelling] = useState<boolean>(false);
+
+  const handleCancel = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (cancelling) return;
+    setCancelling(true);
+    try {
+      await api.cancelPaymentIntent(id);
+    } catch {
+      // Gracefully ignore cancellation network failure and proceed back to store
+    } finally {
+      router.push('/shop');
+    }
+  };
+
   const handleConfirm = async () => {
     setConfirming(true);
     setError(null);
@@ -77,13 +92,14 @@ export default function CheckoutPage() {
       {/* Top Header */}
       <header className="border-b border-border-light bg-bg-card">
         <div className="max-w-2xl mx-auto px-4 h-16 flex items-center justify-between">
-          <Link
-            href="/shop"
-            className="text-xs text-text-secondary hover:text-text-primary transition flex items-center gap-1.5 font-medium"
+          <button
+            onClick={handleCancel}
+            disabled={cancelling || confirming}
+            className="text-xs text-text-secondary hover:text-text-primary transition flex items-center gap-1.5 font-medium disabled:opacity-50"
           >
             <span className="material-symbols-outlined text-base">arrow_back</span>
-            <span>Cancel and return to store</span>
-          </Link>
+            <span>{cancelling ? 'Cancelling...' : 'Cancel and return to store'}</span>
+          </button>
           <div className="flex items-center gap-2">
             <div className="w-6 h-6 rounded-lg bg-primary flex items-center justify-center">
               <span className="material-symbols-outlined text-white text-sm" style={{ fontVariationSettings: "'FILL' 1" }}>

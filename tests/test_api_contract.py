@@ -51,6 +51,10 @@ class ApiContractTests(unittest.TestCase):
         self.assertIn(response.risk_level, {"LOW", "MEDIUM", "HIGH"})
         self.assertGreaterEqual(response.fraud_probability, 0.0)
         self.assertLessEqual(response.fraud_probability, 1.0)
+        self.assertTrue(response.input_valid)
+        self.assertIn(response.policy_verdict, {"PASS", "WARNING", "FLAGGED_FOR_REVIEW", "REJECTED", "OUT_OF_SCOPE"})
+        self.assertIn(response.policy_action, {"ALLOW", "REVIEW", "REJECT"})
+        self.assertIsInstance(response.reason_codes, list)
 
     def test_transaction_type_is_normalised_and_checked(self):
         row = self.dataset.iloc[0]

@@ -3,7 +3,10 @@ const nextConfig = {
   reactStrictMode: true,
   async rewrites() {
     const apiUrl = (
-      process.env.NEXT_PUBLIC_API_URL?.trim() || 'https://upi-fraud-detection-api.vercel.app'
+      process.env.NEXT_PUBLIC_API_URL?.trim() ||
+      (process.env.NODE_ENV === 'production'
+        ? 'https://upi-fraud-detection-api.vercel.app'
+        : 'http://127.0.0.1:8000')
     ).replace(/\/$/, '');
     return [
       {
@@ -13,6 +16,10 @@ const nextConfig = {
       {
         source: '/v1/:path*',
         destination: `${apiUrl}/v1/:path*`,
+      },
+      {
+        source: '/payments/:path*',
+        destination: `${apiUrl}/payments/:path*`,
       },
     ];
   },

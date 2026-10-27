@@ -45,6 +45,11 @@ from sklearn.metrics import (
     roc_curve,
 )
 from sklearn.model_selection import train_test_split
+import math
+from api.risk_policy import (
+    evaluate_transaction_risk_policy,
+    validate_transaction_inputs,
+)
 
 _DATABASE_LOAD_ERROR: str | None = None
 try:
@@ -306,8 +311,12 @@ def _feature_importance_data(model: Any) -> list[dict[str, Any]]:
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Keep startup non-blocking for serverless cold-starts.
-    # Database tables are already created and artifacts load lazily on demand.
+    # Ensure payment gateway tables exist on cold-start (SQLite on Vercel).
+    if _PAYMENTS_AVAILABLE:
+        try:
+            init_payment_tables()
+        except Exception as exc:
+            warnings.warn(f"Payment table init failed during startup: {exc}")
     yield
 
 
@@ -423,6 +432,7 @@ class TransactionInput(BaseModel):
     new_balance_orig: float = Field(default=0.0, ge=0)
     old_balance_dest: float = Field(default=0.0, ge=0)
     new_balance_dest: float = Field(default=0.0, ge=0)
+    merchant_category: Optional[str] = Field(default=None, description="Optional UPI merchant category")
 
     @field_validator("transaction_type")
     @classmethod
@@ -433,8 +443,16 @@ class TransactionInput(BaseModel):
             raise ValueError(f"transaction_type must be one of: {accepted}")
         return normalized
 
+    @field_validator("amount", "old_balance_orig", "new_balance_orig", "old_balance_dest", "new_balance_dest")
+    @classmethod
+    def validate_finite(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("Numeric fields must be finite numbers.")
+        return value
+
 
 class PredictionResponse(BaseModel):
+    # Machine Learning Model Estimate (Frozen/unmodified classifier outputs)
     prediction: Literal["FRAUD", "LEGITIMATE"]
     fraud_probability: float
     risk_level: Literal["LOW", "MEDIUM", "HIGH"]
@@ -442,6 +460,18 @@ class PredictionResponse(BaseModel):
     error_balance_dest: float
     is_high_value: bool
     saved_to_history: bool
+
+    # Input validation outcome
+    input_valid: bool = True
+    validation_errors: list[str] = Field(default_factory=list)
+
+    # Risk-policy assessment (Rule-based accounting and UPI limits)
+    policy_verdict: Literal["PASS", "WARNING", "FLAGGED_FOR_REVIEW", "REJECTED", "OUT_OF_SCOPE"] = "PASS"
+    policy_action: Literal["ALLOW", "REVIEW", "REJECT"] = "ALLOW"
+    reason_codes: list[str] = Field(default_factory=list)
+    reasons: list[str] = Field(default_factory=list)
+    policy_warnings: list[str] = Field(default_factory=list)
+    reconciliation_note: Optional[str] = None
 
 
 @app.get("/")
@@ -523,7 +553,20 @@ def stats() -> dict[str, Any]:
 
 @app.post("/api/predict", response_model=PredictionResponse)
 def predict(transaction: TransactionInput) -> PredictionResponse:
-    """Produce one instant prediction from saved, never-retrained artifacts."""
+    """Produce one instant prediction alongside a transaction validation and risk policy assessment."""
+    # 1. Structural validation of transaction inputs
+    val = validate_transaction_inputs(
+        amount=transaction.amount,
+        transaction_type=transaction.transaction_type,
+        hour_of_day=transaction.hour_of_day,
+        old_balance_orig=transaction.old_balance_orig,
+        new_balance_orig=transaction.new_balance_orig,
+        old_balance_dest=transaction.old_balance_dest,
+        new_balance_dest=transaction.new_balance_dest,
+    )
+    if not val.is_valid:
+        raise HTTPException(status_code=422, detail="; ".join(val.errors))
+
     model, preprocessor = _require_inference_artifacts()
 
     step_value = (
@@ -571,6 +614,21 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
     )
     risk_level = _risk_level(probability)
 
+    # 2. Risk-policy assessment (Rule-based accounting integrity and UPI limits)
+    policy = evaluate_transaction_risk_policy(
+        amount=transaction.amount,
+        transaction_type=transaction.transaction_type,
+        hour_of_day=transaction.hour_of_day,
+        old_balance_orig=transaction.old_balance_orig,
+        new_balance_orig=transaction.new_balance_orig,
+        old_balance_dest=transaction.old_balance_dest,
+        new_balance_dest=transaction.new_balance_dest,
+        model_probability=probability,
+        model_prediction=prediction,
+        model_risk_level=risk_level,
+        merchant_category=transaction.merchant_category,
+    )
+
     saved_to_history = record_prediction(
         amount=transaction.amount,
         transaction_type=transaction.transaction_type,
@@ -588,6 +646,14 @@ def predict(transaction: TransactionInput) -> PredictionResponse:
         error_balance_dest=round(error_balance_dest, 2),
         is_high_value=is_high_value,
         saved_to_history=saved_to_history,
+        input_valid=True,
+        validation_errors=[],
+        policy_verdict=policy.policy_verdict,
+        policy_action=policy.policy_action,
+        reason_codes=policy.reason_codes,
+        reasons=policy.reasons,
+        policy_warnings=policy.warnings,
+        reconciliation_note=policy.reconciliation_note,
     )
 
 

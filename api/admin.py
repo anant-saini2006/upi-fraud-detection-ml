@@ -318,7 +318,11 @@ def admin_simulate(
         list_accounts,
     )
     from api.gateway import _generate_pi_id, _score_transaction
-    from api.index import _MODEL, _PREPROCESSOR
+    from api.index import _MODEL, _PREPROCESSOR, _load_artifacts
+
+    if _MODEL is None or _PREPROCESSOR is None:
+        _load_artifacts()
+        from api.index import _MODEL, _PREPROCESSOR
 
     if _MODEL is None or _PREPROCESSOR is None:
         raise HTTPException(503, "Model artifacts are not loaded")
@@ -442,7 +446,6 @@ def admin_simulate(
                         (acc["wallet_balance"], acc["total_sent"], acc["total_received"], acc["tx_count"], vpa),
                     )
     except Exception:
-        results["errors"] += body.count
         for row in payment_rows:
             p_id = row[0]
             _MEMORY_PAYMENTS[p_id] = {

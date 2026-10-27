@@ -165,7 +165,7 @@ export default function ShopPage() {
             {/* Simulated Hour Slider */}
             <div className="bg-gray-50 border border-border-light rounded-xl p-3 sm:min-w-[300px]">
               <div className="flex justify-between items-center mb-1 text-xs">
-                <span className="text-text-muted font-medium">Clock Override:</span>
+                <span className="text-text-muted font-medium">Clock Override (Rule-based advisory):</span>
                 <span className="font-mono text-primary font-bold">
                   {String(simulatedHour).padStart(2, '0')}:00 {simulatedHour < 6 || simulatedHour >= 22 ? '🌙 Night' : '☀️ Day'}
                 </span>
@@ -179,9 +179,9 @@ export default function ShopPage() {
                 className="w-full accent-primary cursor-pointer h-1.5"
               />
               <div className="flex justify-between text-[10px] text-text-muted font-mono mt-1">
-                <span>00:00 (Risk ↑)</span>
-                <span>12:00 (Normal)</span>
-                <span>23:00 (Risk ↑)</span>
+                <span>00:00 (Off-hours policy)</span>
+                <span>12:00 (Business hours)</span>
+                <span>23:00 (Off-hours policy)</span>
               </div>
             </div>
           </div>
@@ -202,7 +202,7 @@ export default function ShopPage() {
                 Scenario A: Normal ₹499
               </div>
               <p className="text-[11px] text-emerald-700 leading-snug">
-                Alice paying Bob at 14:00. Standard amount, expected to auto-settle.
+                Alice paying Bob at 14:00. Consistent balances and normal amount, auto-settles.
               </p>
             </button>
 
@@ -220,7 +220,7 @@ export default function ShopPage() {
                 Scenario B: Large ₹85,000
               </div>
               <p className="text-[11px] text-amber-700 leading-snug">
-                Eve paying Mallory. High balance drain, routes to Review Queue.
+                Eve paying Mallory. High balance drain, held for review under transaction policy.
               </p>
             </button>
 
@@ -238,7 +238,7 @@ export default function ShopPage() {
                 Scenario C: 02:00 AM Transfer
               </div>
               <p className="text-[11px] text-red-700 leading-snug">
-                ₹12,000 sent at 2:00 AM off-hours from empty account.
+                ₹12,000 sent at 2:00 AM off-hours. Flagged by rule-based time-of-day advisory policy.
               </p>
             </button>
 
@@ -253,7 +253,7 @@ export default function ShopPage() {
                 Scenario D: Rapid 5-Repeat
               </div>
               <p className="text-[11px] text-purple-700 leading-snug">
-                Velocity spike: 5 rapid ₹9,999 transfers in seconds.
+                Velocity spike: 5 rapid transfers. Detected by backend rule-based velocity policy.
               </p>
             </button>
           </div>

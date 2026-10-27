@@ -7,10 +7,13 @@ the model can be swapped out without changing these shapes.
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+GATEWAY_SUPPORTED_OPERATIONS: frozenset[str] = frozenset({"PAYMENT", "TRANSFER"})
 
 
 # ── Frozen scoring contract v1 ───────────────────────────────────────────────
@@ -35,12 +38,62 @@ class ScoringResponse(BaseModel):
 class CreatePaymentIntent(BaseModel):
     """Request body for POST /v1/payment_intents."""
 
-    amount: float = Field(..., gt=0, description="Amount in INR")
-    currency: str = Field(default="INR", description="Currency code")
-    sender_vpa: str = Field(..., description="Sender VPA (e.g. alice@testpay)")
-    receiver_vpa: str = Field(..., description="Receiver VPA (e.g. bob@testpay)")
-    description: Optional[str] = Field(default=None, description="Payment description")
-    scenario_tag: Optional[str] = Field(default=None, description="Preset scenario tag (e.g. normal, review, night_drain, rapid_repeat)")
+    amount: float = Field(..., gt=0, le=10_000_000.0, description="Amount in INR")
+    currency: str = Field(default="INR", description="Currency code (e.g. INR)")
+    sender_vpa: str = Field(..., min_length=3, max_length=64, description="Sender VPA (e.g. alice@testpay)")
+    receiver_vpa: str = Field(..., min_length=3, max_length=64, description="Receiver VPA (e.g. bob@testpay)")
+    transaction_type: Optional[str] = Field(
+        default="TRANSFER",
+        description="Checkout operation type: TRANSFER (P2P) or PAYMENT (P2M)",
+    )
+    description: Optional[str] = Field(default=None, max_length=255, description="Payment description")
+    scenario_tag: Optional[str] = Field(default=None, max_length=64, description="Preset scenario tag")
+
+    @field_validator("amount")
+    @classmethod
+    def validate_amount(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("Amount must be a finite number.")
+        if value <= 0:
+            raise ValueError("Amount must be greater than 0.")
+        if value > 10_000_000.0:
+            raise ValueError("Amount exceeds maximum permissible gateway limit of ₹1,00,00,000.")
+        return value
+
+    @field_validator("currency")
+    @classmethod
+    def validate_currency(cls, value: str) -> str:
+        norm = value.strip().upper()
+        if norm != "INR":
+            raise ValueError(f"Unsupported currency '{value}'. Only 'INR' is supported.")
+        return norm
+
+    @field_validator("sender_vpa", "receiver_vpa")
+    @classmethod
+    def validate_vpa(cls, value: str) -> str:
+        norm = value.strip().lower()
+        if "@" not in norm or len(norm) < 3 or norm.startswith("@") or norm.endswith("@"):
+            raise ValueError(f"Invalid UPI VPA format: '{value}'. Expected format: user@bank.")
+        return norm
+
+    @field_validator("transaction_type")
+    @classmethod
+    def validate_transaction_type(cls, value: Optional[str]) -> str:
+        if value is None:
+            return "TRANSFER"
+        norm = value.strip().upper()
+        if norm not in GATEWAY_SUPPORTED_OPERATIONS:
+            accepted = ", ".join(sorted(GATEWAY_SUPPORTED_OPERATIONS))
+            raise ValueError(
+                f"Unsupported checkout operation '{value}'. Supported gateway operations are: {accepted}"
+            )
+        return norm
+
+    @model_validator(mode="after")
+    def validate_distinct_accounts(self) -> CreatePaymentIntent:
+        if self.sender_vpa == self.receiver_vpa:
+            raise ValueError("Sender and receiver cannot be the same VPA.")
+        return self
 
 
 class ConfirmPaymentIntent(BaseModel):
@@ -49,6 +102,16 @@ class ConfirmPaymentIntent(BaseModel):
     simulated_hour: Optional[int] = Field(
         default=None, ge=0, le=23, description="Override the real clock (0–23)"
     )
+
+    @field_validator("simulated_hour")
+    @classmethod
+    def validate_hour(cls, value: Optional[int]) -> Optional[int]:
+        if value is not None:
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError("simulated_hour must be an integer between 0 and 23.")
+            if value < 0 or value > 23:
+                raise ValueError("simulated_hour must be between 0 and 23.")
+        return value
 
 
 class PaymentIntentResponse(BaseModel):
@@ -105,6 +168,21 @@ class ThresholdSettings(BaseModel):
     review_threshold: float = Field(
         ..., ge=0.0, le=1.0, description="Probability >= this → requires_review"
     )
+
+    @field_validator("block_threshold", "review_threshold")
+    @classmethod
+    def validate_finite_threshold(cls, value: float) -> float:
+        if not math.isfinite(value):
+            raise ValueError("Threshold must be a finite number.")
+        if value < 0.0 or value > 1.0:
+            raise ValueError("Threshold must be between 0.0 and 1.0.")
+        return value
+
+    @model_validator(mode="after")
+    def validate_threshold_order(self) -> ThresholdSettings:
+        if self.block_threshold < self.review_threshold:
+            raise ValueError("block_threshold must be greater than or equal to review_threshold.")
+        return self
 
 
 class AccountInfo(BaseModel):

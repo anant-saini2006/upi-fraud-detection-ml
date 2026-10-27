@@ -18,7 +18,7 @@ interface MockRazorpayModalProps {
     razorpay_order_id: string;
     razorpay_payment_id: string;
     razorpay_signature: string;
-  }) => void;
+  }) => Promise<any> | void;
   onFailure: (errorMessage: string) => void;
 }
 
@@ -63,11 +63,15 @@ export default function MockRazorpayModal({
   const [cardExpiry, setCardExpiry] = useState('12/28');
   const [cardCvv, setCardCvv] = useState('123');
   const [selectedBank, setSelectedBank] = useState('HDFC');
-  const [processingStep, setProcessingStep] = useState<'idle' | 'authorizing' | 'success'>('idle');
+  const [processingStep, setProcessingStep] = useState<
+    'idle' | 'authorizing' | 'verifying' | 'success' | 'error'
+  >('idle');
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setProcessingStep('idle');
+      setErrorMessage(null);
       document.body.style.overflow = 'hidden';
     } else {
       document.body.style.overflow = 'unset';
@@ -83,25 +87,41 @@ export default function MockRazorpayModal({
 
   const handleSimulateSuccess = async () => {
     setProcessingStep('authorizing');
+    setErrorMessage(null);
 
-    setTimeout(async () => {
+    try {
+      // 1. Simulated PIN entry & bank handshake delay
+      await new Promise((resolve) => setTimeout(resolve, 800));
+
       const mockPaymentId = `pay_mock_${Math.random().toString(36).substring(2, 10)}${Date.now().toString().slice(-4)}`;
       const signature = await computeMockHmacSha256(order.order_id, mockPaymentId);
 
+      // 2. Pending Verification stage — transmitting to backend
+      setProcessingStep('verifying');
+
+      // 3. Await backend verification response
+      await onSuccess({
+        razorpay_order_id: order.order_id,
+        razorpay_payment_id: mockPaymentId,
+        razorpay_signature: signature,
+      });
+
+      // 4. Only after backend returns verified: true, display simulated success!
       setProcessingStep('success');
 
+      // Brief delay to let user see confirmed outcome before closing
       setTimeout(() => {
-        onSuccess({
-          razorpay_order_id: order.order_id,
-          razorpay_payment_id: mockPaymentId,
-          razorpay_signature: signature,
-        });
-      }, 700);
-    }, 1100);
+        onClose();
+      }, 1400);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : 'Server-side verification failed';
+      setErrorMessage(msg);
+      setProcessingStep('error');
+    }
   };
 
   const handleSimulateDecline = () => {
-    onFailure('Payment declined by issuing bank (Simulated Sandbox Rejection).');
+    onFailure('Simulated payment declined by bank (Sandbox Test Rejection).');
     onClose();
   };
 
@@ -151,20 +171,62 @@ export default function MockRazorpayModal({
               <>
                 <div className="w-14 h-14 border-4 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
                 <div className="space-y-1">
-                  <h4 className="text-base font-semibold text-slate-900">Contacting Bank UPI Server…</h4>
+                  <h4 className="text-base font-semibold text-slate-900">Simulating Bank Authorization…</h4>
                   <p className="text-xs text-slate-500 font-mono">
-                    Order ID: {order.order_id} · Generating HMAC-SHA256 signature
+                    Order ID: {order.order_id} · Computing authentic HMAC-SHA256 signature
                   </p>
                 </div>
               </>
-            ) : (
+            ) : processingStep === 'verifying' ? (
+              <>
+                <div className="w-14 h-14 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto" />
+                <div className="space-y-1">
+                  <h4 className="text-base font-semibold text-slate-900">Verifying With Backend Server…</h4>
+                  <p className="text-xs text-slate-500">
+                    Transmitting verification payload to FastAPI backend (<span className="font-mono text-slate-700">/payments/verify</span>)…
+                  </p>
+                  <p className="text-[11px] text-amber-700 bg-amber-50 rounded-md py-1 px-2 inline-block font-medium">
+                    Pending cryptographic signature check & database write
+                  </p>
+                </div>
+              </>
+            ) : processingStep === 'success' ? (
               <>
                 <div className="w-14 h-14 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto text-2xl animate-bounce">
                   ✓
                 </div>
                 <div className="space-y-1">
-                  <h4 className="text-base font-bold text-emerald-700">Payment Captured!</h4>
-                  <p className="text-xs text-slate-500">Transmitting verification payload to FastAPI backend…</p>
+                  <h4 className="text-base font-bold text-emerald-700">Simulated Payment Confirmed!</h4>
+                  <p className="text-xs text-slate-500">
+                    FastAPI backend verified HMAC-SHA256 signature and confirmed simulated payment.
+                  </p>
+                  <p className="text-[11px] text-emerald-800 bg-emerald-50 rounded-md py-1 px-2 inline-block font-medium">
+                    Test Mode Sandbox — No real funds were moved
+                  </p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="w-14 h-14 rounded-full bg-red-100 text-red-600 flex items-center justify-center mx-auto text-2xl">
+                  ✕
+                </div>
+                <div className="space-y-1">
+                  <h4 className="text-base font-bold text-red-700">Verification Failed</h4>
+                  <p className="text-xs text-slate-600">{errorMessage || 'The server rejected the payment verification payload.'}</p>
+                </div>
+                <div className="pt-2 flex justify-center gap-2">
+                  <button
+                    onClick={() => setProcessingStep('idle')}
+                    className="px-4 py-2 bg-slate-800 text-white rounded-lg text-xs font-semibold hover:bg-slate-700 transition"
+                  >
+                    Back to Checkout
+                  </button>
+                  <button
+                    onClick={onClose}
+                    className="px-4 py-2 border border-slate-300 text-slate-700 rounded-lg text-xs font-semibold hover:bg-slate-50 transition"
+                  >
+                    Close
+                  </button>
                 </div>
               </>
             )}

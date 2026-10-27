@@ -34,13 +34,16 @@ import pandas as pd
 from fastapi import APIRouter, Header, HTTPException, Request
 
 from api.database import (
+    cancel_payment,
     create_payment,
     get_account,
     get_payment,
+    get_recent_sender_payment_count,
     get_thresholds,
     update_balances,
     update_payment_scoring,
 )
+from api.risk_policy import evaluate_transaction_risk_policy
 from api.schema import (
     ConfirmPaymentIntent,
     CreatePaymentIntent,
@@ -119,10 +122,11 @@ def _score_transaction(
     """
     from api.index import _fraud_probabilities, _risk_level
 
+    step_value = 15 * 24 + hour
     raw_input = pd.DataFrame(
         [
             {
-                "step": hour,
+                "step": step_value,
                 "type": "TRANSFER",  # Score as TRANSFER, not PAYMENT
                 "amount": amount,
                 "oldbalanceOrg": old_balance_orig,
@@ -298,13 +302,25 @@ def confirm_intent(
         raise HTTPException(404, f"Payment intent not found: {payment_id}")
 
     if payment["status"] != "requires_payment_method":
+        if payment["status"] in ("succeeded", "requires_review", "blocked"):
+            # Idempotent return: do not re-score or duplicate ledger entries
+            return _payment_to_response(payment)
+        if payment["status"] == "cancelled":
+            raise HTTPException(
+                400,
+                f"Payment {payment_id} has been cancelled and cannot be confirmed",
+            )
         raise HTTPException(
             400,
             f"Payment {payment_id} is already {payment['status']} and cannot be confirmed again",
         )
 
-    # Load model artifacts.
-    from api.index import _MODEL, _PREPROCESSOR
+    # Load model artifacts lazily on demand if not yet initialized.
+    from api.index import _MODEL, _PREPROCESSOR, _load_artifacts
+
+    if _MODEL is None or _PREPROCESSOR is None:
+        _load_artifacts()
+        from api.index import _MODEL, _PREPROCESSOR
 
     if _MODEL is None or _PREPROCESSOR is None:
         raise HTTPException(
@@ -324,68 +340,16 @@ def confirm_intent(
         else (payment.get("simulated_hour") if payment.get("simulated_hour") is not None else datetime.now(timezone.utc).hour)
     )
 
-    # Risk pattern analysis:
-    # In PaySim, fraudulent transfers route to unverified mule accounts where funds
-    # do not settle as normal destination ledger growth (newbalanceDest == 0 or discrepancy).
-    is_mule = (
-        payment["receiver_vpa"] == "mallory@testpay"
-        or "mule" in str(receiver.get("display_name", "")).lower()
-        or "fraud" in str(sender.get("display_name", "")).lower()
-    )
-    tag = (payment.get("scenario_tag") or "").lower()
-    desc = (payment.get("description") or "").lower()
-
-    # 1. High risk / Blocked fraud (prob >= 0.70):
-    #    - Off-hours transfer to mule account (e.g. 02:00 AM)
-    #    - Account drain to mule account
-    #    - Explicit blocked scenarios (Scenario C, Scenario D / rapid repeats, night drain)
-    is_blocked_pattern = (
-        not ("review" in tag or "scenario b" in desc)
-        and (
-            (is_mule and (hour < 6 or hour >= 23))
-            or "night_drain" in tag
-            or "rapid" in tag
-            or "scenario c" in desc
-            or "scenario d" in desc
-            or "02:00" in desc
-            or "rapid repeat" in desc
-            or (is_mule and payment["amount"] >= 100000)
-        )
-    )
-
-    # 2. Medium risk / Requires review (prob between 0.30 and 0.70):
-    #    - Large transfer to mule or unusual daytime high amount
-    #    - Borderline off-hours or high balance drain without full night mule
-    #    - Explicit review scenarios (Scenario B, "review" tag, "unusual large")
-    is_review_pattern = (
-        not is_blocked_pattern
-        and (
-            "review" in tag
-            or "scenario b" in desc
-            or "unusual large" in desc
-            or is_mule
-            or ((hour < 7 or hour >= 22) and payment["amount"] >= 10000)
-            or payment["amount"] >= 50000
-        )
-    )
-
     old_balance_orig = float(sender["wallet_balance"])
     new_balance_orig = max(old_balance_orig - payment["amount"], 0.0)
     old_balance_dest = float(receiver["wallet_balance"])
+    new_balance_dest = old_balance_dest + payment["amount"]
 
-    if is_blocked_pattern:
-        # Classic PaySim mule cashout signature: funds routed to untracked external mule
-        old_balance_dest = 0.0
-        new_balance_dest = 0.0
-    elif is_review_pattern:
-        # Destination unverified / provisional discrepancy (~45% posterior probability)
-        new_balance_dest = max(old_balance_dest + payment["amount"] - 12.5, 0.0)
-    else:
-        # Clean verified destination settlement
-        new_balance_dest = old_balance_dest + payment["amount"]
+    # Real velocity monitoring: count recent payments from this sender in the database
+    recent_count = get_recent_sender_payment_count(payment["sender_vpa"], window_seconds=60)
 
-    # Score.
-    probability, label, risk_band, reasons = _score_transaction(
+    # Score transaction with the actual features
+    probability, label, risk_band, model_reasons = _score_transaction(
         amount=payment["amount"],
         hour=hour,
         old_balance_orig=old_balance_orig,
@@ -396,24 +360,48 @@ def confirm_intent(
         preprocessor=_PREPROCESSOR,
     )
 
-    # Apply thresholds.
+    # Evaluate risk policy (combines accounting integrity, UPI limits, velocity, and ML score)
+    policy = evaluate_transaction_risk_policy(
+        amount=payment["amount"],
+        transaction_type="TRANSFER",
+        hour_of_day=hour,
+        old_balance_orig=old_balance_orig,
+        new_balance_orig=new_balance_orig,
+        old_balance_dest=old_balance_dest,
+        new_balance_dest=new_balance_dest,
+        model_probability=probability,
+        model_prediction=label,
+        model_risk_level=risk_band,
+        recent_velocity_count=recent_count,
+        velocity_threshold=3,
+    )
+
+    # Apply thresholds & policy verdict
     thresholds = get_thresholds()
-    if probability >= thresholds["block_threshold"]:
+    if policy.policy_action == "REJECT":
+        status = "blocked"
+        decline_reason = f"Payment blocked: {'; '.join(policy.reasons[:2])}"
+    elif probability >= thresholds["block_threshold"]:
         status = "blocked"
         decline_reason = f"Fraud score {probability:.2f} exceeds block threshold {thresholds['block_threshold']:.2f}"
-    elif probability >= thresholds["review_threshold"]:
+    elif policy.policy_action == "REVIEW" or probability >= thresholds["review_threshold"]:
         status = "requires_review"
         decline_reason = None
     else:
-        status = "succeeded"
-        decline_reason = None
-        # Move money in the simulated ledger.
-        if not update_balances(
-            payment["sender_vpa"], payment["receiver_vpa"], payment["amount"]
-        ):
-            # Insufficient balance — block instead.
+        if old_balance_orig < payment["amount"]:
             status = "blocked"
             decline_reason = "Insufficient balance in sender's wallet"
+        else:
+            status = "succeeded"
+            decline_reason = None
+            if not update_balances(
+                payment["sender_vpa"], payment["receiver_vpa"], payment["amount"]
+            ):
+                status = "blocked"
+                decline_reason = "Insufficient balance in sender's wallet"
+
+    # Merge reasons to ensure high-priority policy and model signals are surfaced
+    final_reasons = policy.reasons[:3] if policy.reasons else model_reasons[:3]
 
     # Persist scoring result.
     update_payment_scoring(
@@ -422,7 +410,7 @@ def confirm_intent(
         fraud_probability=probability,
         fraud_label=label,
         risk_band=risk_band,
-        reasons=reasons,
+        reasons=final_reasons,
         decline_reason=decline_reason,
         simulated_hour=hour,
         scenario_tag=payment.get("scenario_tag"),
@@ -448,3 +436,32 @@ def get_intent(
         raise HTTPException(404, f"Payment intent not found: {payment_id}")
 
     return _payment_to_response(payment)
+ 
+ 
+@router.post("/payment_intents/{payment_id}/cancel")
+def cancel_intent(
+    payment_id: str,
+    authorization: Optional[str] = Header(default=None),
+) -> PaymentIntentResponse:
+    """Cancel an unconfirmed payment intent."""
+    _require_auth(authorization)
+
+    payment = get_payment(payment_id)
+    if payment is None:
+        raise HTTPException(404, f"Payment intent not found: {payment_id}")
+
+    if payment["status"] == "cancelled":
+        return _payment_to_response(payment)
+
+    if payment["status"] != "requires_payment_method":
+        raise HTTPException(
+            400,
+            f"Cannot cancel payment {payment_id} with status '{payment['status']}'",
+        )
+
+    cancelled = cancel_payment(payment_id, decline_reason="Cancelled by user")
+    if cancelled is None:
+        raise HTTPException(500, "Failed to cancel payment intent")
+
+    return _payment_to_response(cancelled)
+
