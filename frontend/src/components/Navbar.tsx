@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { LayoutDashboard, Search, BarChart2, FileText, Info, Shield } from 'lucide-react';
+import { LayoutDashboard, Search, BarChart2, FileText, Shield } from 'lucide-react';
 import clsx from 'clsx';
 
 const NAV_ITEMS = [
@@ -10,7 +10,6 @@ const NAV_ITEMS = [
   { href: '/predict',     label: 'Transaction Prediction', icon: Search         },
   { href: '/analysis',   label: 'Dataset Analysis',       icon: FileText       },
   { href: '/performance', label: 'Model Performance',      icon: BarChart2      },
-  { href: '/about',       label: 'About',                  icon: Info           },
 ];
 
 export default function Navbar() {

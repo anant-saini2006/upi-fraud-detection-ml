@@ -11,7 +11,6 @@ const navItems = [
   { href: '/predict', icon: 'shield', label: 'Transaction Prediction' },
   { href: '/analysis', icon: 'bar_chart', label: 'Dataset Analysis' },
   { href: '/performance', icon: 'speed', label: 'Model Performance' },
-  { href: '/about', icon: 'info', label: 'About' },
 ];
 
 const gatewayNavItems = [
