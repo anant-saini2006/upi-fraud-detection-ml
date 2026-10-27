@@ -242,6 +242,11 @@ def init_payment_tables() -> None:
         logger.error("Failed to initialize in-memory payment gateway tables: %s", exc3)
 
 
+# Auto-create tables on module import (essential for Vercel serverless cold-starts
+# where ASGI lifespan events are not reliably executed).
+init_payment_tables()
+
+
 def _db() -> Session:
     global _engine, _SessionLocal
     try:
